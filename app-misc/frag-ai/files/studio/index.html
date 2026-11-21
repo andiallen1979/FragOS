@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><title>Code Studio</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.css">
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<div id="menubar">
+  <div class="menu"><button class="menu-btn">File</button><div class="dropdown">
+    <div class="dd-item" onclick="newFile()"><span>New File</span><span>Ctrl+N</span></div>
+    <div class="dd-item" onclick="newFolder()"><span>New Folder</span><span></span></div>
+    <div class="dd-sep"></div>
+    <div class="dd-item" onclick="runCode('save')"><span>Save</span><span>Ctrl+S</span></div>
+    <div class="dd-item" onclick="saveAs()"><span>Save As...</span><span></span></div>
+  </div></div>
+  <div class="menu"><button class="menu-btn">Edit</button><div class="dropdown">
+    <div class="dd-item" onclick="cm.undo()"><span>Undo</span><span>Ctrl+Z</span></div>
+    <div class="dd-item" onclick="cm.redo()"><span>Redo</span><span>Ctrl+Y</span></div>
+    <div class="dd-sep"></div>
+    <div class="dd-item" onclick="cm.execCommand('find')"><span>Find</span><span>Ctrl+F</span></div>
+    <div class="dd-item" onclick="cm.execCommand('replace')"><span>Replace</span><span>Ctrl+H</span></div>
+  </div></div>
+  <div class="menu"><button class="menu-btn">Run</button><div class="dropdown">
+    <div class="dd-item" onclick="runCode('inline')"><span>Run Active File</span><span>F5</span></div>
+    <div class="dd-item" onclick="runCode('konsole')"><span>Run in Konsole</span><span>Shift+F5</span></div>
+    <div class="dd-sep"></div>
+    <div class="dd-item" onclick="clearTerm()"><span>Clear Output</span><span></span></div>
+  </div></div>
+  <div class="menu"><button class="menu-btn">View</button><div class="dropdown">
+    <div class="dd-item" onclick="togglePane('explorer')"><span>Toggle Explorer</span><span></span></div>
+    <div class="dd-item" onclick="togglePane('ai-pane')"><span>Toggle AI Assistant</span><span></span></div>
+    <div class="dd-item" onclick="togglePane('term-pane')"><span>Toggle Terminal</span><span></span></div>
+  </div></div>
+  <div class="spacer"></div>
+  <button class="tb-btn" onclick="openThemeModal()">&#127912; Themes</button>
+</div>
+
+<div id="main">
+  <div id="activity">
+    <button class="act-btn active" id="act-exp" onclick="togglePane('explorer')" title="Explorer">&#128193;</button>
+    <button class="act-btn active" id="act-ai" onclick="togglePane('ai-pane')" title="AI Assistant">&#10024;</button>
+    <button class="act-btn active" id="act-term" onclick="togglePane('term-pane')" title="Terminal">&#9002;</button>
+  </div>
+
+  <div id="explorer">
+    <div class="pane-hdr">
+      <span>Explorer (~/.code)</span>
+      <div class="icon-row">
+        <button class="ic-btn" onclick="newFile()" title="New File">+</button>
+        <button class="ic-btn" onclick="newFolder()" title="New Folder">&#128193;</button>
+        <button class="ic-btn" onclick="refreshTree()" title="Refresh">&#8635;</button>
+      </div>
+    </div>
+    <div id="tree"></div>
+  </div>
+
+  <div id="res-exp" class="res-v"></div>
+  <div id="center">
+    <div id="tabs"></div>
+    <div id="editor-wrap"><textarea id="editor"></textarea></div>
+    <div id="res-term" class="res-h"></div>
+    <div id="term-pane">
+      <div class="pane-hdr">
+        <span>Output</span>
+        <div class="icon-row">
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#ccc;cursor:pointer;margin-right:4px" title="Automatically send run output to AI"><input type="checkbox" id="auto-ai" style="accent-color:var(--acc);cursor:pointer;margin:0"> Auto</label><button class="tb-btn" onclick="sendOutput()" style="padding:1px 7px;font-size:11px">Send to AI</button>
+          <button class="ic-btn" onclick="clearTerm()" title="Clear">&#128465;</button>
+        </div>
+      </div>
+      <div id="term">Ready in /home/andi/.code</div>
+    </div>
+  </div>
+
+  <div id="res-ai" class="res-v"></div>
+  <div id="ai-pane">
+    <div class="pane-hdr" id="ai-hdr"><span>AI Assistant</span><div class="icon-row" style="align-items:center"><input id="ai-alpha" type="range" min="0.25" max="1" step="0.05" value="1" oninput="setAIOpacity(this.value)" style="display:none"><button class="ic-btn" onclick="toggleFloatAI()" title="Float / Dock">&#10697;</button><button class="ic-btn" onclick="toggleAI()" title="Collapse">&#187;</button><button class="ic-btn" onclick="clearChat()" title="Clear">&#128465;</button></div></div>
+    <div id="ai-bar"><select id="model"></select></div>
+    <div id="chat"></div>
+    <div id="prompt-box">
+      <textarea id="prompt" placeholder="Ask AI to write, edit, or debug the active file..."></textarea>
+      <button class="tb-btn run" id="sendBtn" onclick="sendChat()">Send</button>
+      <button class="tb-btn" id="stopBtn" onclick="stopChat()" style="display:none;background:var(--red);border-color:#e5534b;color:#fff">Stop</button><button class="tb-btn" onclick="runCode('save')" title="Save (Ctrl+S)">&#128190;</button><button class="tb-btn run" onclick="runCode('inline')" title="Run (F5)">&#9654;</button><button class="tb-btn" onclick="runCode('konsole')" title="Konsole">&#9635;</button>
+    </div>
+  </div>
+</div>
+
+<button id="ai-tab" onclick="toggleAI()">&#10024; AI</button>
+<div id="theme-modal" class="hidden" onclick="if(event.target===this)closeThemeModal()"><div class="tm-card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><strong>&#127912; 8-Bit Theme Editor</strong><button class="ic-btn" onclick="closeThemeModal()">&times;</button></div><select id="tm-preset" onchange="applyPreset(this.value)" style="width:100%;padding:5px;background:var(--bg);color:var(--fg);border:1px solid var(--bdr);border-radius:4px"></select><div class="tm-grid" id="tm-pickers"></div><div style="display:flex;justify-content:flex-end;gap:6px"><button class="tb-btn" onclick="applyPreset('default')">Reset</button><button class="tb-btn run" onclick="closeThemeModal()">Done</button></div></div></div>
+<div id="statusbar">
+  <span id="sb-file">/home/andi/.code/script.py</span>
+  <span id="sb-pos">Ln 1, Col 1 &nbsp;|&nbsp; UTF-8 &nbsp;|&nbsp; Python</span>
+</div>
+
+<script>window.STUDIO_TOKEN="__TOKEN__";</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/shell/shell.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/htmlmixed/htmlmixed.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/searchcursor.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/search.min.js"></script>
+<script src="/app.js"></script>
+</body></html>
