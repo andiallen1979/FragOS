@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 systemctl --user start frag-ai-studio.service 2>/dev/null || true
 BROWSER="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v brave)"
-[ -n "$BROWSER" ] && exec "$BROWSER" --app="http://127.0.0.1:8765/mm" --new-window >/dev/null 2>&1 &
-xdg-open "http://127.0.0.1:8765/mm" >/dev/null 2>&1 &
+[ -n "$BROWSER" ] && exec "$BROWSER" --app="http://localhost:8765/mm" --new-window >/dev/null 2>&1 &
+xdg-open "http://localhost:8765/mm" >/dev/null 2>&1 &

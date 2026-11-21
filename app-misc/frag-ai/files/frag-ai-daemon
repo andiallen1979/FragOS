@@ -8,7 +8,7 @@ DEFAULT_CWD = os.path.expanduser("~/.code")
 USER_HOME = os.path.expanduser("~")
 STAGED_DIR = "/opt/open-webui/data/workspace/staged_saves"
 LAUNCHER = "/usr/local/bin/owui-konsole-run"
-OLLAMA_URL = "http://127.0.0.1:11434"
+OLLAMA_URL = "http://localhost:11434"
 
 import secrets
 os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
@@ -175,6 +175,7 @@ class Handler(BaseHTTPRequestHandler):
         static_map = {
             "/": ("index.html", "text/html; charset=utf-8"),
             "/mm": ("mm.html", "text/html; charset=utf-8"),
+            "/media": ("media.html", "text/html; charset=utf-8"),
             "/style.css": ("style.css", "text/css"),
             "/app.js": ("app.js", "application/javascript"),
             "/mm.js": ("mm.js", "application/javascript"),
@@ -260,4 +261,4 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args): return
 
-ThreadingHTTPServer(("127.0.0.1", 8765), Handler).serve_forever()
+ThreadingHTTPServer(("localhost", 8765), Handler).serve_forever()
