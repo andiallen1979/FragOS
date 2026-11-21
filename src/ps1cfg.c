@@ -2,23 +2,15 @@
  * ps1cfg.c — Zero-Dependency POSIX termios Bash Prompt Customizer
  * Part of fragOS-utils (https://github.com/andiallen1979/FragOS)
  *
- * Features:
- *  - Pure POSIX <termios.h>, <unistd.h>, <signal.h>, <sys/select.h>, <sys/socket.h>
- *  - Works in pure terminal / headless TTY environments (no X11 or Wayland required)
- *  - Full standard keyboard navigation: Arrow keys, Tab/Shift+Tab, Enter/Space, Esc
- *  - Optional Linux Console GPM mouse (--gpm) via /dev/gpmctl (zero libgpm dependency)
- *    and live [M] toggle inside the TUI (GPM on raw TTY, XTerm SGR in terminal emulators)
- *  - Clean CLI flags: -h/--help, --help-html [FILE], -v/--version, --gpm, --tty
- *  - Automatically manages current user (~/.custom_prompt.sh + ~/.bashrc hook)
- *    or root (/etc/profile.d/99-custom-prompt.sh) when launched with sudo/root
- *  - Embeds # PS1CFG_STATE header to reload your exact settings on startup
- *  - Graphics-editor painted color square selector + Brush routine (FG/BG)
- *  - One-key [U] User/Root Status Square toggle (green user / red root)
- *  - Per-segment visibility toggles (enable/disable any segment)
- *  - Powerline, Rounded, Slanted, Clean, and Pipe Pill (|$PWD:\h| |) styles
- *  - Nerd Font icons with automatic 7-bit ASCII fallback on Linux TTY (--tty)
- *  - Zero-fork /proc/net/tcp & /proc/net/route socket/gateway telemetry
- *  - Atomic temp-file write + .bak backup + clean uninstall ('X')
+ * v1.7.0 Improvements for Pure Linux TTY / Non-X11 / Non-Wayland Consoles:
+ *  - Automatic 16-color VGA ANSI palette mapping when running on Linux console /
+ *    dumb / 16-color terminals (avoids broken 24-bit 38;2;R;G;B / 48;2;R;G;B sequences
+ *    that strip/garble colors into red/cyan/black/white on classic Linux VTs)
+ *  - Full 24-bit RGB truecolor automatically used in truecolor/256-color terminals
+ *    (COLORTERM=truecolor|24bit or xterm-256color / tmux / screen / etc.)
+ *  - Respects NO_COLOR environment variable and --color-mode={auto,truecolor,ansi16,mono}
+ *  - Non-destructive terminal adjustment: sets TERM=linux when running on /dev/tty*
+ *    if TERM is unset/dumb, keeps exact terminal colors, and restores cleanly on exit
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -37,12 +29,19 @@
 #include <termios.h>
 #include <unistd.h>
 
-#define PS1CFG_VERSION "1.6.0"
+#define PS1CFG_VERSION "1.7.1"
 #define TUI_BOX_WIDTH 74
 #define GPM_NODE_CTL "/dev/gpmctl"
 #define GPM_EVT_MOVE 0x0001
 #define GPM_EVT_DOWN 0x0004
 #define GPM_BTN_LEFT 0x04
+
+typedef enum {
+    COLOR_AUTO = 0,
+    COLOR_TRUECOLOR,
+    COLOR_ANSI16,
+    COLOR_MONO
+} ColorMode;
 
 typedef struct {
     unsigned short eventMask;
@@ -67,21 +66,23 @@ typedef struct {
 typedef struct {
     const char *name;
     uint8_t r, g, b;
+    int ansi16_code; /* Standard SGR 30..37 / 90..97 */
+    bool bright;
 } ColorSquare;
 
 static const ColorSquare PALETTE[] = {
-    {"Crust",     0x11, 0x11, 0x1b}, {"Mantle",   0x18, 0x18, 0x25},
-    {"Base",      0x1e, 0x1e, 0x2e}, {"Surface0", 0x31, 0x32, 0x44},
-    {"Surface2",  0x58, 0x5b, 0x70}, {"Subtext",  0xa6, 0xad, 0xc8},
-    {"Text",      0xcd, 0xd6, 0xf4}, {"Lavender", 0xb4, 0xbe, 0xfe},
-    {"Blue",      0x89, 0xb4, 0xfa}, {"Sapphire", 0x74, 0xc7, 0xec},
-    {"Sky",       0x89, 0xdc, 0xeb}, {"Teal",     0x94, 0xe2, 0xd5},
-    {"Green",     0xa6, 0xe3, 0xa1}, {"Yellow",   0xf9, 0xe2, 0xaf},
-    {"Peach",     0xfa, 0xb3, 0x87}, {"Maroon",   0xeb, 0xa0, 0xac},
-    {"Red",       0xf3, 0x8b, 0xa8}, {"Mauve",    0xcb, 0xa6, 0xf7},
-    {"Pink",      0xf5, 0xc2, 0xe7}, {"Flamingo", 0xf2, 0xcd, 0xcd},
-    {"PureWhite", 0xff, 0xff, 0xff}, {"Amber",    0xff, 0xbf, 0x00},
-    {"Emerald",   0x10, 0xb9, 0x81}, {"Crimson",  0xdc, 0x26, 0x26}
+    {"Crust",     0x11, 0x11, 0x1b, 0, false}, {"Mantle",   0x18, 0x18, 0x25, 0, false},
+    {"Base",      0x1e, 0x1e, 0x2e, 0, false}, {"Surface0", 0x31, 0x32, 0x44, 0, true},
+    {"Surface2",  0x58, 0x5b, 0x70, 0, true},  {"Subtext",  0xa6, 0xad, 0xc8, 7, false},
+    {"Text",      0xcd, 0xd6, 0xf4, 7, true},  {"Lavender", 0xb4, 0xbe, 0xfe, 5, true},
+    {"Blue",      0x89, 0xb4, 0xfa, 4, true},  {"Sapphire", 0x74, 0xc7, 0xec, 6, true},
+    {"Sky",       0x89, 0xdc, 0xeb, 6, true},  {"Teal",     0x94, 0xe2, 0xd5, 6, false},
+    {"Green",     0xa6, 0xe3, 0xa1, 2, true},  {"Yellow",   0xf9, 0xe2, 0xaf, 3, true},
+    {"Peach",     0xfa, 0xb3, 0x87, 3, false}, {"Maroon",   0xeb, 0xa0, 0xac, 1, false},
+    {"Red",       0xf3, 0x8b, 0xa8, 1, true},  {"Mauve",    0xcb, 0xa6, 0xf7, 5, false},
+    {"Pink",      0xf5, 0xc2, 0xe7, 5, true},  {"Flamingo", 0xf2, 0xcd, 0xcd, 7, true},
+    {"PureWhite", 0xff, 0xff, 0xff, 7, true},  {"Amber",    0xff, 0xbf, 0x00, 3, true},
+    {"Emerald",   0x10, 0xb9, 0x81, 2, false}, {"Crimson",  0xdc, 0x26, 0x26, 1, false}
 };
 #define PALETTE_COUNT ((int)(sizeof(PALETTE) / sizeof(PALETTE[0])))
 
@@ -142,6 +143,9 @@ typedef struct {
     bool sgr_mouse_active;
     int gpm_fd;
     int vc_num;
+    ColorMode cli_color_mode;
+    ColorMode effective_color_mode;
+    char term_info[64];
     char target_path[512];
     char bashrc_path[512];
     int active_seg;
@@ -161,6 +165,86 @@ static void write_str(const char *s, size_t len) {
     (void)r;
 }
 
+static int rgb_to_ansi16_base(uint8_t r, uint8_t g, uint8_t b) {
+    /* Map RGB to closest standard VGA/Linux console 16-color index (0..7 base, +60 for bright) */
+    int best_idx = 0;
+    int best_dist = 1 << 30;
+    static const struct { uint8_t r, g, b; int code; } table16[16] = {
+        {0x00, 0x00, 0x00, 30}, {0xaa, 0x00, 0x00, 31}, {0x00, 0xaa, 0x00, 32}, {0xaa, 0x55, 0x00, 33},
+        {0x00, 0x00, 0xaa, 34}, {0xaa, 0x00, 0xaa, 35}, {0x00, 0xaa, 0xaa, 36}, {0xaa, 0xaa, 0xaa, 37},
+        {0x55, 0x55, 0x55, 90}, {0xff, 0x55, 0x55, 91}, {0x55, 0xff, 0x55, 92}, {0xff, 0xff, 0x55, 93},
+        {0x55, 0x55, 0xff, 94}, {0xff, 0x55, 0xff, 95}, {0x55, 0xff, 0xff, 96}, {0xff, 0xff, 0xff, 97}
+    };
+    for (int i = 0; i < 16; i++) {
+        int dr = (int)r - (int)table16[i].r;
+        int dg = (int)g - (int)table16[i].g;
+        int db = (int)b - (int)table16[i].b;
+        int dist = dr * dr * 2 + dg * dg * 3 + db * db;
+        if (dist < best_dist) {
+            best_dist = dist;
+            best_idx = i;
+        }
+    }
+    return table16[best_idx].code;
+}
+
+static void emit_fg_sgr(FILE *fp, uint8_t r, uint8_t g, uint8_t b, bool bold) {
+    if (g_state.effective_color_mode == COLOR_MONO) {
+        fprintf(fp, "\033[%sm", bold ? "1" : "0");
+        return;
+    }
+    if (g_state.effective_color_mode == COLOR_ANSI16) {
+        int code = rgb_to_ansi16_base(r, g, b);
+        fprintf(fp, "\033[%s%dm", bold ? "1;" : "", code);
+        return;
+    }
+    fprintf(fp, "\033[%s38;2;%u;%u;%um", bold ? "1;" : "", r, g, b);
+}
+
+static void emit_bg_sgr(FILE *fp, uint8_t r, uint8_t g, uint8_t b) {
+    if (g_state.effective_color_mode == COLOR_MONO) return;
+    if (g_state.effective_color_mode == COLOR_ANSI16) {
+        int fg_code = rgb_to_ansi16_base(r, g, b);
+        int bg_code = (fg_code >= 90) ? (fg_code - 90 + 100) : (fg_code - 30 + 40);
+        fprintf(fp, "\033[%dm", bg_code);
+        return;
+    }
+    fprintf(fp, "\033[48;2;%u;%u;%um", r, g, b);
+}
+
+static void emit_fg_bg_sgr(FILE *fp, uint8_t fgr, uint8_t fgg, uint8_t fgb,
+                          bool has_bg, uint8_t bgr, uint8_t bgg, uint8_t bgb, bool bold) {
+    if (g_state.effective_color_mode == COLOR_MONO) {
+        fprintf(fp, "\033[%sm", bold ? "1" : "0");
+        return;
+    }
+    if (g_state.effective_color_mode == COLOR_ANSI16) {
+        int fg_code = rgb_to_ansi16_base(fgr, fgg, fgb);
+        if (has_bg) {
+            int bg_base = rgb_to_ansi16_base(bgr, bgg, bgb);
+            int bg_code = (bg_base >= 90) ? (bg_base - 90 + 100) : (bg_base - 30 + 40);
+            fprintf(fp, "\033[%s%d;%dm", bold ? "1;" : "", fg_code, bg_code);
+        } else {
+            fprintf(fp, "\033[%s%dm", bold ? "1;" : "", fg_code);
+        }
+        return;
+    }
+    if (has_bg) {
+        fprintf(fp, "\033[%s38;2;%u;%u;%u;48;2;%u;%u;%um", bold ? "1;" : "", fgr, fgg, fgb, bgr, bgg, bgb);
+    } else {
+        fprintf(fp, "\033[%s38;2;%u;%u;%um", bold ? "1;" : "", fgr, fgg, fgb);
+    }
+}
+
+static const char *color_mode_label(ColorMode m) {
+    switch (m) {
+        case COLOR_TRUECOLOR: return "24-bit RGB";
+        case COLOR_ANSI16:    return "VGA 16-Color";
+        case COLOR_MONO:      return "Monochrome";
+        default:              return "Auto";
+    }
+}
+
 static void print_help(const char *prog) {
     printf("\n========================================================================\n");
     printf("  ps1cfg v%s — Zero-Dependency POSIX termios Bash Prompt Customizer\n", PS1CFG_VERSION);
@@ -171,10 +255,10 @@ static void print_help(const char *prog) {
     printf("OPTIONS:\n");
     printf("  -h, --help            Display this comprehensive help manual and exit.\n");
     printf("  --help-html [FILE]    Write a styled standalone HTML help manual.\n");
-    printf("                        Defaults to ~/Desktop/ps1cfg_help.html.\n");
     printf("  -v, --version         Print version and build details and exit.\n");
     printf("  --gpm                 Enable Linux console GPM mouse (/dev/gpmctl).\n");
-    printf("  --tty                 Force pure-terminal 7-bit ASCII glyph mode.\n\n");
+    printf("  --tty                 Force pure-terminal 7-bit ASCII glyph mode.\n");
+    printf("  --color-mode MODE     Set color output: auto, truecolor, ansi16, mono.\n\n");
     printf("KEYBINDINGS:\n");
     printf("  Arrows / H,L  Navigate the 12x2 color palette and paint active segment.\n");
     printf("  Tab / S-Tab   Cycle forward/backward through prompt segments (1-4).\n");
@@ -218,11 +302,10 @@ static void export_help_html(const char *custom_path) {
         "code,kbd{font-family:ui-monospace,monospace;background:#313244;color:#f9e2af;padding:2px 6px;border-radius:6px;font-size:.92em}"
         "</style></head><body><div class=\"wrap\">"
         "<h1>ps1cfg v%s</h1><p>Zero-Dependency POSIX <code>termios</code> Bash Prompt Customizer (fragOS-utils)</p>"
-        "<div class=\"card\"><h2>Keybindings</h2><ul>"
+        "<div class=\"card\"><h2>Keybindings &amp; Console Color Modes</h2><ul>"
+        "<li>Automatically uses <strong>VGA 16-Color</strong> on pure Linux consoles/TTYs and <strong>24-bit RGB</strong> on truecolor terminals.</li>"
         "<li><kbd>Arrows</kbd> / <kbd>Enter</kbd>: Select and paint colors from the 24-color palette.</li>"
-        "<li><kbd>1</kbd>-<kbd>4</kbd> / <kbd>Tab</kbd> / <kbd>V</kbd>: Select and show/hide segments.</li>"
         "<li><kbd>U</kbd>: Toggle trailing User/Root Status Square (green user / red root).</li>"
-        "<li><kbd>P</kbd>: Load Pipe Pill preset.</li>"
         "<li><kbd>S</kbd> / <kbd>X</kbd> / <kbd>Q</kbd>: Save atomically / Uninstall / Quit.</li>"
         "</ul></div></div></body></html>\n",
         PS1CFG_VERSION, PS1CFG_VERSION);
@@ -230,17 +313,56 @@ static void export_help_html(const char *custom_path) {
     printf("Wrote styled HTML help guide to: %s\n", path);
 }
 
-static void detect_environment(void) {
+static void detect_and_adjust_terminal(void) {
     const char *disp = getenv("DISPLAY");
     const char *wdisp = getenv("WAYLAND_DISPLAY");
     const char *term = getenv("TERM");
+    const char *colorterm = getenv("COLORTERM");
+    const char *no_color = getenv("NO_COLOR");
+
     g_state.no_gui_env = ((!disp || disp[0] == '\0') && (!wdisp || wdisp[0] == '\0'));
-    g_state.is_linux_console = (term && (strcmp(term, "linux") == 0 || strncmp(term, "vt", 2) == 0));
     g_state.vc_num = 0;
+
     const char *tname = ttyname(STDIN_FILENO);
     if (tname && strncmp(tname, "/dev/tty", 8) == 0 && isdigit((unsigned char)tname[8])) {
         g_state.vc_num = atoi(tname + 8);
         g_state.is_linux_console = true;
+    }
+
+    /* If running on a Linux VT or headless session with unset/dumb TERM, pick a color-capable TERM */
+    if ((!term || term[0] == '\0' || strcmp(term, "dumb") == 0) && g_state.is_linux_console) {
+        setenv("TERM", "linux", 1);
+        term = "linux";
+    }
+    if (term && (strcmp(term, "linux") == 0 || strncmp(term, "vt", 2) == 0)) {
+        g_state.is_linux_console = true;
+    }
+
+    snprintf(g_state.term_info, sizeof(g_state.term_info), "%s",
+             (term && term[0] != '\0') ? term : "unknown");
+
+    if (g_state.cli_color_mode != COLOR_AUTO) {
+        g_state.effective_color_mode = g_state.cli_color_mode;
+        return;
+    }
+    if (no_color && no_color[0] != '\0') {
+        g_state.effective_color_mode = COLOR_MONO;
+        return;
+    }
+
+    bool has_truecolor_hint = colorterm &&
+        (strstr(colorterm, "truecolor") != NULL || strstr(colorterm, "24bit") != NULL);
+
+    if (g_state.is_linux_console && !has_truecolor_hint) {
+        /* Classic Linux console VTs support 16 standard VGA colors reliably; 24-bit SGR often misrenders */
+        g_state.effective_color_mode = COLOR_ANSI16;
+    } else if (has_truecolor_hint || (term && (strstr(term, "256color") != NULL || strstr(term, "xterm") != NULL ||
+               strstr(term, "foot") != NULL || strstr(term, "alacritty") != NULL || strstr(term, "kitty") != NULL))) {
+        g_state.effective_color_mode = COLOR_TRUECOLOR;
+    } else if (g_state.no_gui_env) {
+        g_state.effective_color_mode = COLOR_ANSI16;
+    } else {
+        g_state.effective_color_mode = COLOR_TRUECOLOR;
     }
 }
 
@@ -743,7 +865,14 @@ static void draw_box_top(int row, const char *title, bool ascii) {
     const char *tr = ascii ? "+" : "\xe2\x95\xae";
     const char *hz = ascii ? "-" : "\xe2\x94\x80";
     int title_len = (int)strlen(title);
-    printf("\033[%d;1H\033[38;2;88;91;112m%s%s \033[1;38;2;137;180;250m%s\033[0;38;2;88;91;112m ", row, tl, hz, title);
+    printf("\033[%d;1H", row);
+    emit_fg_sgr(stdout, 0x58, 0x5b, 0x70, false);
+    printf("%s%s ", tl, hz);
+    emit_fg_sgr(stdout, 0x89, 0xb4, 0xfa, true);
+    printf("%s", title);
+    printf("\033[0m");
+    emit_fg_sgr(stdout, 0x58, 0x5b, 0x70, false);
+    printf(" ");
     int used = 4 + title_len;
     for (int i = used; i < TUI_BOX_WIDTH - 1; i++) fputs(hz, stdout);
     printf("%s\033[0m", tr);
@@ -753,15 +882,20 @@ static void draw_box_bot(int row, bool ascii) {
     const char *bl = ascii ? "+" : "\xe2\x95\xb0";
     const char *br = ascii ? "+" : "\xe2\x95\xaf";
     const char *hz = ascii ? "-" : "\xe2\x94\x80";
-    printf("\033[%d;1H\033[38;2;88;91;112m%s", row, bl);
+    printf("\033[%d;1H", row);
+    emit_fg_sgr(stdout, 0x58, 0x5b, 0x70, false);
+    printf("%s", bl);
     for (int i = 1; i < TUI_BOX_WIDTH - 1; i++) fputs(hz, stdout);
     printf("%s\033[0m", br);
 }
 
 static void draw_box_sides(int row, bool ascii) {
     const char *vt = ascii ? "|" : "\xe2\x94\x82";
-    printf("\033[%d;1H\033[38;2;88;91;112m%s\033[0m\033[%d;%dH\033[38;2;88;91;112m%s\033[0m",
-           row, vt, row, TUI_BOX_WIDTH, vt);
+    printf("\033[%d;1H", row);
+    emit_fg_sgr(stdout, 0x58, 0x5b, 0x70, false);
+    printf("%s\033[0m\033[%d;%dH", vt, row, TUI_BOX_WIDTH);
+    emit_fg_sgr(stdout, 0x58, 0x5b, 0x70, false);
+    printf("%s\033[0m", vt);
 }
 
 static void render_ui(void) {
@@ -773,10 +907,18 @@ static void render_ui(void) {
 
     draw_box_top(1, "ps1cfg v" PS1CFG_VERSION " — fragOS-utils Bash Prompt Studio", box_ascii);
     draw_box_sides(2, box_ascii);
-    printf("\033[2;4HContext: \033[1;38;2;%s\033[0m   Env: \033[1m%s\033[0m   Mouse [M]: \033[1;38;2;116;199;236m%s\033[0m",
-           g_state.system_managed ? "243;139;168mroot (#)" : "166;227;161muser ($)",
-           g_state.no_gui_env ? "Pure TTY" : "GUI/Term",
-           get_mouse_status_label());
+    printf("\033[2;4HContext: ");
+    if (g_state.system_managed) {
+        emit_fg_sgr(stdout, 0xf3, 0x8b, 0xa8, true);
+        printf("root (#)");
+    } else {
+        emit_fg_sgr(stdout, 0xa6, 0xe3, 0xa1, true);
+        printf("user ($)");
+    }
+    printf("\033[0m  Term: \033[1m%s\033[0m(%s)  Mouse[M]: ",
+           g_state.term_info, color_mode_label(g_state.effective_color_mode));
+    emit_fg_sgr(stdout, 0x74, 0xc7, 0xec, true);
+    printf("%s\033[0m", get_mouse_status_label());
     draw_box_bot(3, box_ascii);
 
     draw_box_top(4, "Live Prompt Preview", box_ascii);
@@ -794,17 +936,17 @@ static void render_ui(void) {
         RgbColor blk = c->euid_square
             ? (g_state.system_managed ? (RgbColor){0xdc, 0x26, 0x26, false} : (RgbColor){0x10, 0xb9, 0x81, false})
             : (c->seg_bg[3].transparent ? c->seg_fg[3] : c->seg_bg[3]);
-        printf("\033[1;38;2;%u;%u;%u", pfg.r, pfg.g, pfg.b);
-        if (!pbg.transparent) printf(";48;2;%u;%u;%u", pbg.r, pbg.g, pbg.b);
-        printf("m|");
+        emit_fg_bg_sgr(stdout, pfg.r, pfg.g, pfg.b, !pbg.transparent, pbg.r, pbg.g, pbg.b, true);
+        printf("|");
         bool printed = false;
         if (c->seg_enabled[1]) { printf("/home/user/projects"); printed = true; }
         if (c->seg_enabled[0]) { printf("%shost", printed ? ":" : ""); printed = true; }
         if (c->seg_enabled[2] && c->proc_net_enabled) { printf("%sTCP:4/2", printed ? ":" : ""); printed = true; }
         if (c->euid_square || c->seg_enabled[3]) {
-            printf("|\033[48;2;%u;%u;%um \033[1;38;2;%u;%u;%u", blk.r, blk.g, blk.b, pfg.r, pfg.g, pfg.b);
-            if (!pbg.transparent) printf(";48;2;%u;%u;%u", pbg.r, pbg.g, pbg.b);
-            printf("m");
+            printf("|");
+            emit_bg_sgr(stdout, blk.r, blk.g, blk.b);
+            printf(" ");
+            emit_fg_bg_sgr(stdout, pfg.r, pfg.g, pfg.b, !pbg.transparent, pbg.r, pbg.g, pbg.b, true);
         }
         printf("|\033[0m ");
     } else {
@@ -812,16 +954,19 @@ static void render_ui(void) {
             if (!c->seg_enabled[i]) continue;
             if (i == 2 && !c->proc_net_enabled) continue;
             const char *glyph = c->ascii_fallback ? ICONS[c->seg_icon[i]].ascii_glyph : ICONS[c->seg_icon[i]].nerd_glyph;
-            printf("\033[38;2;%u;%u;%um", c->seg_fg[i].r, c->seg_fg[i].g, c->seg_fg[i].b);
-            if (!c->seg_bg[i].transparent) printf("\033[48;2;%u;%u;%um", c->seg_bg[i].r, c->seg_bg[i].g, c->seg_bg[i].b);
+            emit_fg_bg_sgr(stdout, c->seg_fg[i].r, c->seg_fg[i].g, c->seg_fg[i].b,
+                           !c->seg_bg[i].transparent, c->seg_bg[i].r, c->seg_bg[i].g, c->seg_bg[i].b, false);
             printf(" %s %s \033[0m", glyph, sample[i]);
             if (i < last_enabled && !c->seg_bg[i].transparent) {
-                printf("\033[38;2;%u;%u;%um%s\033[0m", c->seg_bg[i].r, c->seg_bg[i].g, c->seg_bg[i].b, sep);
+                emit_fg_sgr(stdout, c->seg_bg[i].r, c->seg_bg[i].g, c->seg_bg[i].b, false);
+                printf("%s\033[0m", sep);
             }
         }
         if (c->euid_square) {
-            if (g_state.system_managed) printf(" \033[48;2;220;38;38m \033[0m");
-            else printf(" \033[48;2;16;185;129m \033[0m");
+            printf(" ");
+            if (g_state.system_managed) emit_bg_sgr(stdout, 0xdc, 0x26, 0x26);
+            else emit_bg_sgr(stdout, 0x10, 0xb9, 0x81);
+            printf(" \033[0m");
         }
         if (last_enabled == -1 && !c->euid_square) printf("\033[2m(all segments hidden — press V to show)\033[0m");
     }
@@ -837,23 +982,32 @@ static void render_ui(void) {
         bool on = c->seg_enabled[i];
         printf("\033[8;%dH", seg_cols[i]);
         if (sel) {
-            printf("\033[1;38;2;17;17;27;48;2;137;180;250m %s %s \033[0m", seg_labels[i], on ? chk : "-");
+            emit_fg_bg_sgr(stdout, 0x11, 0x11, 0x1b, true, 0x89, 0xb4, 0xfa, true);
+            printf(" %s %s \033[0m", seg_labels[i], on ? chk : "-");
         } else if (on) {
-            printf("\033[38;2;205;214;244;48;2;49;50;68m %s %s \033[0m", seg_labels[i], chk);
+            emit_fg_bg_sgr(stdout, 0xcd, 0xd6, 0xf4, true, 0x31, 0x32, 0x44, false);
+            printf(" %s %s \033[0m", seg_labels[i], chk);
         } else {
-            printf("\033[38;2;108;112;134;48;2;30;30;46m %s - \033[0m", seg_labels[i]);
+            emit_fg_bg_sgr(stdout, 0x6c, 0x70, 0x86, true, 0x1e, 0x1e, 0x2e, false);
+            printf(" %s - \033[0m", seg_labels[i]);
         }
     }
     draw_box_bot(9, box_ascii);
 
     draw_box_top(10, "2. Color Brush Palette [Arrows / Enter / Click]", box_ascii);
     draw_box_sides(11, box_ascii);
-    printf("\033[11;4HBrush: \033[48;2;%u;%u;%um   \033[0m #%02X%02X%02X",
-           g_state.brush.r, g_state.brush.g, g_state.brush.b,
-           g_state.brush.r, g_state.brush.g, g_state.brush.b);
-    printf("\033[11;28H%s[F: Paint FG]\033[0m  %s[B: Paint BG]\033[0m  \033[38;2;166;173;200m[C: No BG]\033[0m",
-           !g_state.target_bg ? "\033[1;38;2;17;17;27;48;2;137;180;250m" : "\033[38;2;166;173;200;48;2;49;50;68m",
-           g_state.target_bg ? "\033[1;38;2;17;17;27;48;2;137;180;250m" : "\033[38;2;166;173;200;48;2;49;50;68m");
+    printf("\033[11;4HBrush: ");
+    emit_bg_sgr(stdout, g_state.brush.r, g_state.brush.g, g_state.brush.b);
+    printf("   \033[0m #%02X%02X%02X", g_state.brush.r, g_state.brush.g, g_state.brush.b);
+    printf("\033[11;28H");
+    if (!g_state.target_bg) emit_fg_bg_sgr(stdout, 0x11, 0x11, 0x1b, true, 0x89, 0xb4, 0xfa, true);
+    else emit_fg_bg_sgr(stdout, 0xa6, 0xad, 0xc8, true, 0x31, 0x32, 0x44, false);
+    printf("[F: Paint FG]\033[0m  ");
+    if (g_state.target_bg) emit_fg_bg_sgr(stdout, 0x11, 0x11, 0x1b, true, 0x89, 0xb4, 0xfa, true);
+    else emit_fg_bg_sgr(stdout, 0xa6, 0xad, 0xc8, true, 0x31, 0x32, 0x44, false);
+    printf("[B: Paint BG]\033[0m  ");
+    emit_fg_sgr(stdout, 0xa6, 0xad, 0xc8, false);
+    printf("[C: No BG]\033[0m");
 
     draw_box_sides(12, box_ascii);
     draw_box_sides(13, box_ascii);
@@ -863,10 +1017,16 @@ static void render_ui(void) {
         int col = 4 + (i % 12) * 5;
         printf("\033[%d;%dH", r, col);
         if (i == g_state.selected_square) {
-            printf("\033[1;38;2;249;226;175m[\033[48;2;%u;%u;%um   \033[0;1;38;2;249;226;175m]\033[0m",
-                   PALETTE[i].r, PALETTE[i].g, PALETTE[i].b);
+            emit_fg_sgr(stdout, 0xf9, 0xe2, 0xaf, true);
+            printf("[");
+            emit_bg_sgr(stdout, PALETTE[i].r, PALETTE[i].g, PALETTE[i].b);
+            printf("   \033[0m");
+            emit_fg_sgr(stdout, 0xf9, 0xe2, 0xaf, true);
+            printf("]\033[0m");
         } else {
-            printf(" \033[48;2;%u;%u;%um   \033[0m ", PALETTE[i].r, PALETTE[i].g, PALETTE[i].b);
+            printf(" ");
+            emit_bg_sgr(stdout, PALETTE[i].r, PALETTE[i].g, PALETTE[i].b);
+            printf("   \033[0m ");
         }
     }
     draw_box_bot(15, box_ascii);
@@ -876,26 +1036,36 @@ static void render_ui(void) {
     printf("\033[17;4HStyle: ");
     for (int i = 0; i < STYLE_COUNT; i++) {
         bool active = (i == c->style_idx);
-        printf("%s[%s]\033[0m ",
-               active ? "\033[1;38;2;17;17;27;48;2;137;180;250m" : "\033[38;2;166;173;200;48;2;49;50;68m",
-               STYLES[i].name);
+        if (active) emit_fg_bg_sgr(stdout, 0x11, 0x11, 0x1b, true, 0x89, 0xb4, 0xfa, true);
+        else emit_fg_bg_sgr(stdout, 0xa6, 0xad, 0xc8, true, 0x31, 0x32, 0x44, false);
+        printf("[%s]\033[0m ", STYLES[i].name);
     }
     draw_box_sides(18, box_ascii);
     printf("\033[18;4HIcon:  ");
     for (int i = 0; i < ICON_COUNT; i++) {
         bool active = (i == c->seg_icon[g_state.active_seg]);
-        printf("%s[%s]\033[0m ",
-               active ? "\033[1;38;2;17;17;27;48;2;137;180;250m" : "\033[38;2;166;173;200;48;2;49;50;68m",
-               ICONS[i].label);
+        if (active) emit_fg_bg_sgr(stdout, 0x11, 0x11, 0x1b, true, 0x89, 0xb4, 0xfa, true);
+        else emit_fg_bg_sgr(stdout, 0xa6, 0xad, 0xc8, true, 0x31, 0x32, 0x44, false);
+        printf("[%s]\033[0m ", ICONS[i].label);
     }
     draw_box_bot(19, box_ascii);
 
-    printf("\033[20;2H\033[38;2;203;166;247m[P] Pipe Pill\033[0m  \033[38;2;16;185;129m[U] EUID Square: \033[1m%s\033[0m  [A] Glyphs: \033[1m%s\033[0m  [N] /proc/net: \033[1m%s\033[0m",
+    printf("\033[20;2H");
+    emit_fg_sgr(stdout, 0xcb, 0xa6, 0xf7, false);
+    printf("[P] Pipe Pill\033[0m  ");
+    emit_fg_sgr(stdout, 0x10, 0xb9, 0x81, false);
+    printf("[U] EUID Sq: \033[1m%s\033[0m  [A] Glyphs: \033[1m%s\033[0m  [N] /proc/net: \033[1m%s\033[0m",
            c->euid_square ? "ON" : "OFF",
            c->ascii_fallback ? "ASCII" : "Nerd",
            (c->proc_net_enabled && c->seg_enabled[2]) ? "ON" : "OFF");
-    printf("\033[21;2H\033[1;38;2;166;227;161m[S] Save & Apply\033[0m   \033[38;2;243;139;168m[X] Uninstall\033[0m   [V] Show/Hide   [M] Mouse   [Q/Esc] Quit");
-    printf("\033[22;2H\033[38;2;166;227;161m> %s\033[0m", g_state.status_msg);
+    printf("\033[21;2H");
+    emit_fg_sgr(stdout, 0xa6, 0xe3, 0xa1, true);
+    printf("[S] Save & Apply\033[0m   ");
+    emit_fg_sgr(stdout, 0xf3, 0x8b, 0xa8, false);
+    printf("[X] Uninstall\033[0m   \033[0m[V] Show/Hide   [M] Mouse   [Q/Esc] Quit");
+    printf("\033[22;2H");
+    emit_fg_sgr(stdout, 0xa6, 0xe3, 0xa1, false);
+    printf("> %s\033[0m", g_state.status_msg);
     fflush(stdout);
 }
 
@@ -929,6 +1099,7 @@ static void parse_sgr_mouse(void) {
 int main(int argc, char **argv) {
     memset(&g_state, 0, sizeof(g_state));
     g_state.gpm_fd = -1;
+    g_state.cli_color_mode = COLOR_AUTO;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -945,20 +1116,26 @@ int main(int argc, char **argv) {
             g_state.gpm_flag = true;
         } else if (strcmp(argv[i], "--tty") == 0) {
             g_state.force_tty_ascii = true;
+        } else if (strcmp(argv[i], "--color-mode") == 0 && i + 1 < argc) {
+            i++;
+            if (strcmp(argv[i], "truecolor") == 0) g_state.cli_color_mode = COLOR_TRUECOLOR;
+            else if (strcmp(argv[i], "ansi16") == 0) g_state.cli_color_mode = COLOR_ANSI16;
+            else if (strcmp(argv[i], "mono") == 0) g_state.cli_color_mode = COLOR_MONO;
+            else g_state.cli_color_mode = COLOR_AUTO;
         } else {
             fprintf(stderr, "Unknown option: %s\nTry '%s --help' for more information.\n", argv[i], argv[0]);
             return 1;
         }
     }
 
-    detect_environment();
+    detect_and_adjust_terminal();
     g_state.mouse_enabled = g_state.gpm_flag || !g_state.no_gui_env;
     resolve_managed_paths();
     init_default_profile(&g_state.active_cfg, g_state.system_managed);
     brush_load_square(8);
     snprintf(g_state.status_msg, sizeof(g_state.status_msg),
-             "Ready. Target: %s (Arrows/Tab/Enter%s)",
-             g_state.target_path, g_state.mouse_enabled ? " or Mouse" : "");
+             "Ready [%s/%s] -> %s",
+             g_state.term_info, color_mode_label(g_state.effective_color_mode), g_state.target_path);
     load_existing_state();
 
     enable_raw_mode();
