@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+import json, threading, os, shutil, shlex, subprocess, time, urllib.parse, urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+TOKEN_FILE = os.path.expanduser("~/.config/frag-ai/token")
+STUDIO_DIR = "/usr/share/frag-ai/studio"
+DEFAULT_CWD = os.path.expanduser("~/.code")
+USER_HOME = os.path.expanduser("~")
+STAGED_DIR = "/opt/open-webui/data/workspace/staged_saves"
+LAUNCHER = "/usr/local/bin/owui-konsole-run"
+OLLAMA_URL = "http://127.0.0.1:11434"
+
+import secrets
+os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
+if not os.path.exists(TOKEN_FILE):
+    open(TOKEN_FILE, "w").write(secrets.token_hex(24))
+    os.chmod(TOKEN_FILE, 0o600)
+TOKEN = open(TOKEN_FILE).read().strip()
+
+def expand_target(raw_path: str) -> str:
+    p = (raw_path or "").strip()
+    if not p: return os.path.join(DEFAULT_CWD, "script.py")
+    if p == "~" or p.startswith("~/"): p = USER_HOME + p[1:]
+    if not os.path.isabs(p): p = os.path.join(DEFAULT_CWD, p)
+    return os.path.abspath(p)
+
+def safe_in_code(rel_path: str) -> str:
+    base = os.path.abspath(DEFAULT_CWD)
+    target = os.path.abspath(os.path.join(base, rel_path.lstrip("/")))
+    if not (target == base or target.startswith(base + os.sep)):
+        raise ValueError("Path outside ~/.code")
+    return target
+
+def list_tree(root: str):
+    items = []
+    os.makedirs(root, exist_ok=True)
+    for entry in sorted(os.scandir(root), key=lambda e: (not e.is_dir(), e.name.lower())):
+        if entry.name.startswith(".") or entry.name == "__pycache__": continue
+        rel = os.path.relpath(entry.path, DEFAULT_CWD)
+        if entry.is_dir():
+            items.append({"name": entry.name, "rel": rel, "type": "dir", "children": list_tree(entry.path)})
+        else:
+            items.append({"name": entry.name, "rel": rel, "path": entry.path, "type": "file"})
+    return items
+
+def save_file(target: str, code: str):
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f: f.write(code.rstrip() + "\n")
+        os.chmod(target, 0o664)
+        return True, f"Saved {len(code)} bytes to {target}"
+    except PermissionError:
+        os.makedirs(STAGED_DIR, exist_ok=True)
+        staged = os.path.join(STAGED_DIR, f"{int(time.time())}_{os.path.basename(target)}")
+        with open(staged, "w", encoding="utf-8") as f: f.write(code.rstrip() + "\n")
+        return False, f"Permission denied. Staged:\nsudo install -D -m 644 {shlex.quote(staged)} {shlex.quote(target)}"
+
+
+PULL_STATE = {"model": "", "status": "idle", "percent": 0, "done": True, "error": ""}
+
+def get_hw_info():
+    ram_gb = 0
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"): ram_gb = round(int(line.split()[1]) / 1048576, 1)
+    except Exception: pass
+    disk_gb = round(shutil.disk_usage(USER_HOME).free / (1024**3), 1)
+    gpu, vram_gb = "CPU/RAM", 0
+    try:
+        out = subprocess.check_output(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"], text=True, timeout=3).strip().splitlines()[0]
+        gpu, mb = [x.strip() for x in out.split(",")]
+        vram_gb = round(int(mb) / 1024, 1)
+    except Exception:
+        try:
+            vram_gb = round(int(open("/sys/class/drm/card0/device/mem_info_vram_total").read().strip()) / (1024**3), 1)
+            gpu = "AMD GPU"
+        except Exception: pass
+    return {"gpu": gpu, "vram_gb": vram_gb, "ram_gb": ram_gb, "disk_free_gb": disk_gb}
+
+def pull_worker(model):
+    PULL_STATE.update({"model": model, "status": "starting...", "percent": 0, "done": False, "error": ""})
+    try:
+        req = urllib.request.Request(f"{OLLAMA_URL}/api/pull", data=json.dumps({"name": model, "stream": True}).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=3600) as r:
+            for line in r:
+                if not line.strip(): continue
+                ev = json.loads(line.decode("utf-8", "replace"))
+                tot, comp = ev.get("total") or 0, ev.get("completed") or 0
+                pct = int((comp / tot) * 100) if tot else PULL_STATE["percent"]
+                PULL_STATE.update({"status": ev.get("status", ""), "percent": pct})
+        PULL_STATE.update({"status": "completed", "percent": 100, "done": True})
+    except Exception as e:
+        PULL_STATE.update({"status": "error", "error": str(e), "done": True})
+
+class Handler(BaseHTTPRequestHandler):
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Token")
+
+    def _send(self, body: bytes, ctype: str, code=200):
+        self.send_response(code); self._cors()
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+
+    def _json(self, obj, code=200):
+        self._send(json.dumps(obj).encode("utf-8"), "application/json", code)
+
+    def do_OPTIONS(self): self.send_response(204); self._cors(); self.end_headers()
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        static_map = {
+            "/": ("index.html", "text/html; charset=utf-8"),
+            "/mm": ("mm.html", "text/html; charset=utf-8"),
+            "/style.css": ("style.css", "text/css"),
+            "/app.js": ("app.js", "application/javascript"),
+            "/mm.js": ("mm.js", "application/javascript"),
+        }
+        if parsed.path in static_map:
+            fname, ctype = static_map[parsed.path]
+            with open(os.path.join(STUDIO_DIR, fname), "r", encoding="utf-8") as f:
+                txt = f.read().replace("__TOKEN__", TOKEN) if fname.endswith(".html") else f.read()
+            self._send(txt.encode("utf-8"), ctype); return
+        if parsed.path == "/api/models":
+            try:
+                with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=10) as r:
+                    self._json(json.loads(r.read().decode("utf-8")))
+            except Exception as e: self._json({"models": [], "error": str(e)}, 502)
+            return
+        if self.headers.get("X-Token") != TOKEN: self._json({"error": "forbidden"}, 403); return
+        if parsed.path == "/api/mm/status":
+            try:
+                tags = json.loads(urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=10).read().decode())
+                ps = json.loads(urllib.request.urlopen(f"{OLLAMA_URL}/api/ps", timeout=10).read().decode())
+                self._json({"models": tags.get("models", []), "running": ps.get("models", []), "hw": get_hw_info(), "pull": PULL_STATE})
+            except Exception as e: self._json({"error": str(e)}, 502)
+            return
+        if parsed.path == "/api/mm/pull_status":
+            self._json(PULL_STATE); return
+        if parsed.path == "/api/tree":
+            self._json({"root": DEFAULT_CWD, "tree": list_tree(DEFAULT_CWD)}); return
+        if parsed.path == "/api/file":
+            rel = (urllib.parse.parse_qs(parsed.query).get("rel") or [""])[0]
+            try:
+                target = safe_in_code(rel)
+                with open(target, "r", encoding="utf-8", errors="replace") as f:
+                    self._json({"path": target, "rel": rel, "content": f.read()})
+            except Exception as e: self._json({"error": str(e)}, 404)
+            return
+        self._json({"error": "not found"}, 404)
+
+    def do_POST(self):
+        if self.headers.get("X-Token") != TOKEN: self._json({"error": "forbidden"}, 403); return
+        data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode("utf-8"))
+        if self.path == "/api/chat":
+            payload = json.dumps({"model": data.get("model"), "messages": data.get("messages", []), "stream": False}).encode("utf-8")
+            req = urllib.request.Request(f"{OLLAMA_URL}/api/chat", data=payload, headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=180) as r: self._json(json.loads(r.read().decode("utf-8")))
+            except Exception as e: self._json({"error": str(e)}, 502)
+            return
+        if self.path == "/api/mkdir":
+            try:
+                t = safe_in_code(data.get("rel", ""))
+                os.makedirs(t, exist_ok=True); self._json({"ok": True})
+            except Exception as e: self._json({"error": str(e)}, 400)
+            return
+        if self.path == "/api/delete":
+            try:
+                t = safe_in_code(data.get("rel", ""))
+                if os.path.isdir(t): shutil.rmtree(t)
+                elif os.path.exists(t): os.remove(t)
+                self._json({"ok": True})
+            except Exception as e: self._json({"error": str(e)}, 400)
+            return
+        lang, code, mode = (data.get("lang") or "python").lower(), data.get("code") or "", data.get("mode") or "inline"
+        target = expand_target(data.get("path") or "")
+        cwd = os.path.dirname(target) if os.path.isdir(os.path.dirname(target)) else DEFAULT_CWD
+        ok, save_msg = save_file(target, code)
+        if mode == "save" or not ok:
+            res = {"returncode": 0 if ok else 1, "stdout": save_msg if ok else "", "stderr": "" if ok else save_msg}
+        elif mode == "konsole" or (mode == "inline" and any(k in code for k in ("tkinter", "Tk(", "PyQt", "PySide", "pygame", "wx.", "gi.repository"))):
+            p = subprocess.run(["konsole", "--workdir", cwd, "-e", "bash", "-lc", f"python3 {shlex.quote(target)}; read -p '[Done] Press Enter...'"], capture_output=True, text=True, timeout=10)
+            res = {"returncode": p.returncode, "stdout": f"{save_msg}\nLaunched in Konsole: {target}", "stderr": p.stderr}
+        else:
+            try:
+                args = ["python3", target] if lang in ("python", "python3", "py") else ["bash", target]
+                p = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=30)
+                res = {"returncode": p.returncode, "stdout": f"{save_msg}\n\n{p.stdout}".strip(), "stderr": p.stderr}
+            except subprocess.TimeoutExpired: res = {"returncode": 124, "stdout": save_msg, "stderr": "Timed out after 30s."}
+            except Exception as e: res = {"returncode": 1, "stdout": save_msg, "stderr": str(e)}
+        self._json(res)
+
+    def log_message(self, fmt, *args): return
+
+ThreadingHTTPServer(("127.0.0.1", 8765), Handler).serve_forever()
