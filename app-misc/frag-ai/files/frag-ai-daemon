@@ -56,6 +56,66 @@ def save_file(target: str, code: str):
         return False, f"Permission denied. Staged:\nsudo install -D -m 644 {shlex.quote(staged)} {shlex.quote(target)}"
 
 
+
+CATALOG_CACHE = os.path.expanduser("~/.cache/frag-ai/catalog.json")
+
+def fetch_catalog(force=False):
+    os.makedirs(os.path.dirname(CATALOG_CACHE), exist_ok=True)
+    if not force and os.path.exists(CATALOG_CACHE):
+        import time
+        if time.time() - os.path.getmtime(CATALOG_CACHE) < 86400:
+            try: return json.load(open(CATALOG_CACHE))
+            except Exception: pass
+    models = []
+    try:
+        req = urllib.request.Request(
+            "https://ollamadb.dev/api/v1/models?model_type=official&sort_by=pulls&limit=100",
+            headers={"User-Agent": "Frag-MM/1.1"}
+        )
+        raw = json.loads(urllib.request.urlopen(req, timeout=12).read().decode())
+        for m in raw.get("models", []):
+            models.append({
+                "name": m.get("model_name") or m.get("model_identifier", ""),
+                "desc": (m.get("description") or "")[:160],
+                "tags": m.get("labels") or [],
+                "cap": m.get("capability") or ""
+            })
+    except Exception:
+        # Fallback: lightweight parse of ollama.com/library
+        import re
+        html = urllib.request.urlopen("https://ollama.com/library", timeout=12).read().decode("utf-8", "replace")
+        for slug, desc in re.findall(r'href="/library/([^"]+)"[^>]*>.*?<p[^>]*>([^<]+)</p>', html, re.S)[:80]:
+            models.append({"name": slug.strip(), "desc": " ".join(desc.split())[:160], "tags": [], "cap": ""})
+    if models:
+        json.dump(models, open(CATALOG_CACHE, "w"))
+    return models
+
+def recommend_models(prompt_text, helper_model=""):
+    hw = get_hw_info()
+    catalog = fetch_catalog()
+    if not helper_model:
+        tags = json.loads(urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=10).read().decode()).get("models", [])
+        if not tags:
+            return {"error": "No local Ollama models installed yet to run the assistant."}
+        helper_model = tags[0]["name"]
+    compact_cat = "\n".join(f"- {m['name']} ({','.join(m['tags'][:6])}) [{m['cap']}]: {m['desc']}" for m in catalog[:60])
+    sys_msg = (
+        "You are a local Ollama model selector. Given the user's hardware and goal, pick 3 to 5 best models "
+        "from the catalog with exact pullable 'name:tag' strings (e.g. qwen2.5-coder:7b). "
+        "Respect VRAM/RAM limits. Reply ONLY with JSON: "
+        '{"recommendations":[{"model":"name:tag","reason":"short reason","fit":"VRAM/RAM fit"}]}'
+    )
+    user_msg = f"Hardware: {hw}\nGoal: {prompt_text}\n\nCatalog:\n{compact_cat}"
+    payload = {
+        "model": helper_model,
+        "format": "json",
+        "stream": False,
+        "messages": [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}]
+    }
+    req = urllib.request.Request(f"{OLLAMA_URL}/api/chat", data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+    resp = json.loads(urllib.request.urlopen(req, timeout=120).read().decode())
+    return json.loads(resp["message"]["content"])
+
 PULL_STATE = {"model": "", "status": "idle", "percent": 0, "done": True, "error": ""}
 
 def get_hw_info():
@@ -131,6 +191,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e: self._json({"models": [], "error": str(e)}, 502)
             return
         if self.headers.get("X-Token") != TOKEN: self._json({"error": "forbidden"}, 403); return
+        if parsed.path == "/api/mm/catalog":
+            try: self._json({"models": fetch_catalog(force="refresh=1" in parsed.query)})
+            except Exception as e: self._json({"error": str(e)}, 502)
+            return
         if parsed.path == "/api/mm/status":
             try:
                 tags = json.loads(urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=10).read().decode())

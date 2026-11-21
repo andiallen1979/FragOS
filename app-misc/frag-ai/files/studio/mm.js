@@ -81,3 +81,33 @@ async function delModel(m) {
 
 renderPresets();
 refreshMM();
+
+async function askFinder() {
+  const goal = document.getElementById("ai-goal").value.trim();
+  if (!goal) return;
+  const box = document.getElementById("ai-results");
+  box.innerHTML = '<div style="font-size:11.5px;opacity:.8">Asking local LLM...</div>';
+  const r = await fetch("/api/mm/recommend", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+    body: JSON.stringify({ prompt: goal })
+  });
+  const d = await r.json();
+  if (d.error) { box.innerHTML = `<div style="color:var(--red);font-size:11.5px">${d.error}</div>`; return; }
+  box.innerHTML = "";
+  (d.recommendations || []).forEach(rec => {
+    const div = document.createElement("div"); div.className = "preset";
+    div.innerHTML = `<div style="padding-right:6px"><strong>${rec.model}</strong><div style="opacity:.8;font-size:11px">${rec.reason || ""}</div><div style="opacity:.65;font-size:10.5px">${rec.fit || ""}</div></div>`
+      + `<button class="tb-btn run" onclick="pullModel('${rec.model}')">Pull</button>`;
+    box.appendChild(div);
+  });
+}
+
+async function refreshCatalog() {
+  document.getElementById("ai-results").innerHTML = '<div style="font-size:11.5px;opacity:.8">Syncing catalog...</div>';
+  const r = await fetch("/api/mm/catalog?refresh=1", { headers: { "X-Token": TOKEN } });
+  const d = await r.json();
+  document.getElementById("ai-results").innerHTML = d.error
+    ? `<div style="color:var(--red);font-size:11.5px">${d.error}</div>`
+    : `<div style="font-size:11.5px;color:var(--grn)">Synced ${(d.models || []).length} models.</div>`;
+}
