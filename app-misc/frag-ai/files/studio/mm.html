@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><title>Frag-MM — Model Manager</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  body{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+  #mm-body{display:flex;flex:1;overflow:hidden}
+  #mm-main{flex:1;padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:14px}
+  #mm-side{width:340px;background:var(--side);border-left:1px solid var(--bdr);padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:12px}
+  .card{background:var(--side);border:1px solid var(--bdr);border-radius:6px;padding:12px}
+  .card h3{margin:0 0 10px 0;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--acc)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--bdr)}
+  .badge{padding:2px 6px;border-radius:4px;font-size:11px;background:var(--bg);border:1px solid var(--bdr)}
+  .badge.live{border-color:var(--grn);color:var(--grn)}
+  .preset{display:flex;justify-content:space-between;align-items:center;padding:7px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:5px;margin-bottom:6px;font-size:12px}
+  #prog-wrap{height:10px;background:var(--bg);border:1px solid var(--bdr);border-radius:5px;overflow:hidden;margin-top:6px}
+  #prog-bar{height:100%;width:0%;background:var(--grn);transition:width .25s}
+</style>
+</head><body>
+<div id="menubar">
+  <strong style="padding:0 8px;color:var(--acc)">&#9881; Frag-MM</strong>
+  <span id="hw-bar" style="font-size:12px;opacity:.85">Checking hardware...</span>
+  <div class="spacer"></div>
+  <button class="tb-btn" onclick="location.href='/'">&#128187; Code Studio</button>
+  <button class="tb-btn" onclick="refreshMM()">&#8635; Refresh</button>
+</div>
+<div id="mm-body">
+  <div id="mm-main">
+    <div class="card">
+      <h3>Installed Models</h3>
+      <table><thead><tr><th>Model</th><th>Size</th><th>Quant / Params</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="mm-list"></tbody></table>
+    </div>
+  </div>
+  <div id="mm-side">
+    <div class="card">
+      <h3>Pull / Download Model</h3>
+      <div style="display:flex;gap:6px">
+        <input id="pull-in" placeholder="e.g. qwen2.5-coder:14b" style="flex:1;background:var(--bg);color:var(--fg);border:1px solid var(--bdr);border-radius:4px;padding:5px 8px">
+        <button class="tb-btn run" onclick="pullModel()">Pull</button>
+      </div>
+      <div id="pull-msg" style="font-size:11.5px;margin-top:8px;opacity:.9">Idle</div>
+      <div id="prog-wrap"><div id="prog-bar"></div></div>
+    </div>
+    <div class="card">
+      <h3>Embedded / Coding Presets</h3>
+      <div id="presets"></div>
+    </div>
+  </div>
+</div>
+<div id="statusbar"><span>Frag-MM (Ollama Model Manager)</span><span id="mm-count">0 models</span></div>
+<script>window.STUDIO_TOKEN="__TOKEN__";</script>
+<script src="/mm.js"></script>
+</body></html>
