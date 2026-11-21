@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><title>Media Director — Frag-ai</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  body{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+  #md-body{display:flex;flex:1;overflow:hidden}
+  #md-main{flex:1;padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:12px}
+  #md-side{width:310px;background:var(--side);border-left:1px solid var(--bdr);padding:12px;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+  .card{background:var(--side);border:1px solid var(--bdr);border-radius:6px;padding:12px}
+  .card h3{margin:0 0 8px 0;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--acc)}
+  textarea,select,input{width:100%;box-sizing:border-box;background:var(--bg);color:var(--fg);border:1px solid var(--bdr);border-radius:4px;padding:6px;font-family:inherit}
+  .row{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  .job-item{padding:8px;background:var(--bg);border:1px solid var(--bdr);border-radius:5px;cursor:pointer;font-size:12px}
+  .job-item:hover{border-color:var(--acc)}
+  .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:8px}
+  .gallery img{width:100%;border-radius:5px;border:1px solid var(--bdr)}
+  video{width:100%;max-height:420px;border-radius:6px;background:#000}
+</style>
+</head><body>
+<div id="menubar">
+  <strong style="padding:0 8px;color:var(--acc)">&#127916; Media Director</strong>
+  <span style="font-size:11.5px;opacity:.75">RTX 4060 8GB Safe • CPU Audio • Auto VRAM Flush</span>
+  <div class="spacer"></div>
+  <button class="tb-btn" onclick="location.href='/'">&#128187; Code Studio</button>
+  <button class="tb-btn" onclick="location.href='/mm'">&#9881; Frag-MM</button>
+  <button class="tb-btn run" onclick="location.href='/media'">&#127916; Media Director</button>
+</div>
+<div id="md-body">
+  <div id="md-main">
+    <div class="card">
+      <h3>Natural Language Request</h3>
+      <textarea id="md-prompt" rows="3" placeholder="e.g. Research the ESP32-P4 and make a short narrated video explaining its best features..."></textarea>
+      <div class="row">
+        <select id="md-mode" style="flex:1">
+          <option value="video">Full Narrated Video (Research + Script + Audio + Images + MP4)</option>
+          <option value="image">Image Generation (SDXL-Turbo)</option>
+          <option value="audio">Voiceover / Audio Only (Kokoro CPU)</option>
+          <option value="research">Research & Script Only</option>
+        </select>
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px"><input type="checkbox" id="md-research" checked style="width:auto"> Web Research</label>
+        <button class="tb-btn run" onclick="startJob()">&#9654; Produce</button>
+      </div>
+    </div>
+    <div class="card" id="md-stage-card">
+      <h3>Production Output</h3>
+      <div id="md-status-line" style="font-size:12.5px;margin-bottom:8px;opacity:.9">Idle — enter a request above or select a past job on the right.</div>
+      <div id="md-preview"></div>
+    </div>
+  </div>
+  <div id="md-side">
+    <h3 style="margin:0;font-size:12px;text-transform:uppercase;color:var(--acc)">Recent Productions</h3>
+    <div id="md-jobs" style="display:flex;flex-direction:column;gap:6px"></div>
+  </div>
+</div>
+<div id="statusbar"><span>Output Folder: ~/MediaDirector/</span><span id="md-foot">Ready</span></div>
+<script>
+const TOKEN = "__TOKEN__";
+const saved = JSON.parse(localStorage.getItem("cs_theme") || "null");
+if (saved) Object.entries(saved).forEach(([k, v]) => { if (k !== "name") document.documentElement.style.setProperty("--" + k, v); });
+
+let activeJob = null;
+
+async function startJob() {
+  const prompt = document.getElementById("md-prompt").value.trim();
+  const statusEl = document.getElementById("md-status-line");
+  if (!prompt) {
+    statusEl.textContent = "Enter a prompt first before clicking Produce.";
+    return;
+  }
+  statusEl.textContent = "Submitting job to /api/media/run...";
+  try {
+    const body = {
+      prompt,
+      mode: document.getElementById("md-mode").value,
+      research: document.getElementById("md-research").checked
+    };
+    const r = await fetch("/api/media/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+      body: JSON.stringify(body)
+    });
+    const txt = await r.text();
+    let d = {};
+    try { d = JSON.parse(txt); } catch (_) { d = { error: txt || ("HTTP " + r.status) }; }
+    if (!r.ok || d.error || !d.job_id) {
+      statusEl.textContent = "Failed (" + r.status + "): " + (d.error || txt || "No job_id returned");
+      return;
+    }
+    activeJob = d.job_id;
+    statusEl.textContent = "Queued " + d.job_id + "...";
+    loadJobs();
+  } catch (err) {
+    statusEl.textContent = "Request error: " + err.message;
+  }
+}
+
+function renderJob(j) {
+  document.getElementById("md-status-line").textContent = `[${j.stage || "idle"}] ${j.detail || ""}`;
+  document.getElementById("md-foot").textContent = j.id;
+  const box = document.getElementById("md-preview");
+  let html = "";
+  const out = j.outputs || {};
+  if (out.video) html += `<video controls src="/media-files/${j.id}/${out.video}"></video>`;
+  if (out.audio && out.audio.length) {
+    html += `<div style="margin-top:8px">` + out.audio.map(a => `<audio controls src="/media-files/${j.id}/${a}" style="width:100%;margin-top:4px"></audio>`).join("") + `</div>`;
+  }
+  if (out.images && out.images.length) {
+    html += `<div class="gallery">` + out.images.map(img => `<img src="/media-files/${j.id}/${img}">`).join("") + `</div>`;
+  }
+  if (out.script) {
+    html += `<div style="margin-top:8px"><a href="/media-files/${j.id}/${out.script}" target="_blank" style="color:var(--acc)">View Script JSON</a></div>`;
+  }
+  if (j.error) html += `<div style="color:var(--red);margin-top:8px">Error: ${j.error}</div>`;
+  box.innerHTML = html || "<div style='opacity:.7;font-size:12px'>Working...</div>";
+}
+
+async function loadJobs() {
+  const r = await fetch("/api/media/jobs", { headers: { "X-Token": TOKEN } });
+  const d = await r.json();
+  const list = document.getElementById("md-jobs"); list.innerHTML = "";
+  let running = false;
+  (d.jobs || []).forEach(j => {
+    if (!j.done) running = true;
+    const div = document.createElement("div"); div.className = "job-item";
+    div.innerHTML = `<strong>${j.id}</strong> <span style="opacity:.7">(${j.mode})</span><div style="opacity:.85;margin-top:2px">${(j.prompt||"").slice(0,65)}</div><div style="font-size:11px;color:${j.error?'var(--red)':'var(--grn)'}">${j.stage}: ${j.detail||""}</div>`;
+    div.onclick = () => { activeJob = j.id; renderJob(j); };
+    list.appendChild(div);
+    if (j.id === activeJob) renderJob(j);
+  });
+  if (running) setTimeout(loadJobs, 2000);
+}
+
+loadJobs();
+</script>
+</body></html>

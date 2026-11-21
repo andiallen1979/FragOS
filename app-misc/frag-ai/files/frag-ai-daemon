@@ -8,6 +8,7 @@ DEFAULT_CWD = os.path.expanduser("~/.code")
 USER_HOME = os.path.expanduser("~")
 STAGED_DIR = "/opt/open-webui/data/workspace/staged_saves"
 LAUNCHER = "/usr/local/bin/owui-konsole-run"
+MEDIA_DIR = os.path.expanduser("~/MediaDirector")
 OLLAMA_URL = "http://localhost:11434"
 
 import secrets
@@ -205,6 +206,32 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/mm/pull_status":
             self._json(PULL_STATE); return
+        if parsed.path.startswith("/media-files/"):
+            rel = parsed.path[len("/media-files/"):].lstrip("/")
+            full = os.path.abspath(os.path.join(MEDIA_DIR, rel))
+            if not full.startswith(os.path.abspath(MEDIA_DIR)) or not os.path.isfile(full):
+                self._json({"error": "not found"}, 404); return
+            ctype = {
+                ".mp4": "video/mp4",
+                ".png": "image/png",
+                ".wav": "audio/wav",
+                ".json": "application/json",
+                ".txt": "text/plain; charset=utf-8",
+            }.get(os.path.splitext(full)[1].lower(), "application/octet-stream")
+            with open(full, "rb") as f:
+                self._send(f.read(), ctype); return
+        if parsed.path == "/api/media/jobs":
+            os.makedirs(MEDIA_DIR, exist_ok=True)
+            jobs = []
+            for d in sorted(os.listdir(MEDIA_DIR), reverse=True)[:20]:
+                jd = os.path.join(MEDIA_DIR, d)
+                if not os.path.isdir(jd): continue
+                st_p = os.path.join(jd, "status.json")
+                jb_p = os.path.join(jd, "job.json")
+                st = json.load(open(st_p, encoding="utf-8")) if os.path.exists(st_p) else {}
+                jb = json.load(open(jb_p, encoding="utf-8")) if os.path.exists(jb_p) else {}
+                jobs.append({"id": d, "prompt": jb.get("prompt", ""), "mode": jb.get("mode", ""), **st})
+            self._json({"jobs": jobs}); return
         if parsed.path == "/api/tree":
             self._json({"root": DEFAULT_CWD, "tree": list_tree(DEFAULT_CWD)}); return
         if parsed.path == "/api/file":
@@ -220,6 +247,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.headers.get("X-Token") != TOKEN: self._json({"error": "forbidden"}, 403); return
         data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode("utf-8"))
+        if self.path == "/api/media/run":
+            os.makedirs(MEDIA_DIR, exist_ok=True)
+            jid = f"job_{int(time.time())}"
+            jd = os.path.join(MEDIA_DIR, jid)
+            os.makedirs(jd, exist_ok=True)
+            with open(os.path.join(jd, "job.json"), "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            with open(os.path.join(jd, "status.json"), "w", encoding="utf-8") as f:
+                json.dump({"stage": "queued", "detail": "Starting worker...", "done": False}, f)
+            subprocess.Popen([sys.executable, "/usr/libexec/frag-media-worker.py", jd])
+            self._json({"ok": True, "job_id": jid}); return
         if self.path == "/api/chat":
             payload = json.dumps({"model": data.get("model"), "messages": data.get("messages", []), "stream": False}).encode("utf-8")
             req = urllib.request.Request(f"{OLLAMA_URL}/api/chat", data=payload, headers={"Content-Type": "application/json"})
