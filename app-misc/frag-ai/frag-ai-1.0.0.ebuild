@@ -13,7 +13,7 @@ KEYWORDS="~amd64 ~arm64"
 BDEPEND="acct-group/frag-ai"
 RDEPEND="
 	acct-group/frag-ai
-	dev-lang/python:3
+	dev-lang/python:3.12.12
 	sci-ml/ollama
 "
 
