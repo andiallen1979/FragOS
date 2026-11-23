@@ -4,8 +4,7 @@ After=network.target ollama.service
 
 [Service]
 Type=simple
-ExecStartPre=/bin/sh -c '[ -x "%h/.local/share/frag-ai/venv/bin/python" ] || /usr/bin/python3.12 -m venv "%h/.local/share/frag-ai/venv"'
-ExecStart=%h/.local/share/frag-ai/venv/bin/python /usr/libexec/frag-ai-daemon
+ExecStart=/usr/libexec/frag-ai-daemon
 Restart=on-failure
 RestartSec=2
 

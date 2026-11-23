@@ -1,17 +1,24 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+from pathlib import Path
 
-PYTHON=/usr/bin/python3.12
-MEDIA_ENV="${HOME}/.local/share/frag-ai/media-venv"
+media_env = Path.home() / ".local/share/frag-ai/media-venv"
+media_python = media_env / "bin/python"
 
-if [[ ! -x "${PYTHON}" ]]; then
-    echo "Python 3.12 is required. Install app-misc/frag-ai first." >&2
-    exit 1
-fi
+if not media_python.is_file():
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--system-site-packages", str(media_env)],
+        check=True,
+    )
 
-if [[ ! -x "${MEDIA_ENV}/bin/python" ]]; then
-    "${PYTHON}" -m venv --system-site-packages "${MEDIA_ENV}"
-fi
-
-"${MEDIA_ENV}/bin/python" -m pip install --upgrade diffusers kokoro-onnx
-"${MEDIA_ENV}/bin/python" -c 'import torch, diffusers, soundfile, kokoro_onnx; print("Frag-AI media runtime ready")'
+subprocess.run(
+    [str(media_python), "-m", "pip", "install", "--upgrade", "diffusers", "kokoro-onnx"],
+    check=True,
+)
+subprocess.run(
+    [str(media_python), "-c", "import torch, diffusers, soundfile, kokoro_onnx"],
+    check=True,
+)
+print("Frag-AI media runtime ready")
