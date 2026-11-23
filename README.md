@@ -12,7 +12,7 @@ FragOS/
 │   │   ├── frag-ai-1.0.0.ebuild
 │   │   ├── frag-ai-1.1.0.ebuild
 │   │   ├── frag-ai-1.2.0.ebuild
-│   │   ├── frag-ai-1.3.0.ebuild
+│   │   ├── frag-ai-1.3.1.ebuild
 │   │   └── files/
 │   │       ├── frag-ai-daemon
 │   │       ├── frag-media-worker.py
@@ -33,7 +33,7 @@ FragOS/
     └── ps1cfg.c
 ```
 
-`app-misc/frag-ai` uses versioned ebuilds. The current unified Studio implementation is packaged as `frag-ai-1.3.0`; shared application assets and daemon code live in its `files/` directory.
+`app-misc/frag-ai` uses versioned ebuilds. The current unified Studio implementation is packaged as `frag-ai-1.3.1`; shared application assets and daemon code live in its `files/` directory.
 
 ## Publish changes to `https://github.com/andiallen1979/FragOS`
 
