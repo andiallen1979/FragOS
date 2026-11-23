@@ -1,15 +1,29 @@
-# FragOS Portage Overlay & `fragOS-utils`
+# FragOS Gentoo Portage Overlay
 
-Zero-dependency system utilities for **FragOS** / **Gentoo Linux**, featuring **`ps1cfg`** (POSIX `termios` Bash prompt customizer with GPM console mouse support, `/proc/net` telemetry, and automatic User/Root EUID status block).
+Gentoo overlay for FragOS system utilities and **`frag-ai`**, a local AI Studio built around Ollama. Code Studio provides one natural-language workspace for chat, code, attached-image inspection, and image, audio, video, and research generation. Generated code and media have download links in the conversation.
 
 ## Repository Layout
 
 ```text
 FragOS/
 ├── app-misc/
+│   ├── frag-ai/
+│   │   ├── Manifest
+│   │   ├── frag-ai-1.0.0.ebuild
+│   │   ├── frag-ai-1.1.0.ebuild
+│   │   ├── frag-ai-1.2.0.ebuild
+│   │   ├── frag-ai-1.3.0.ebuild
+│   │   └── files/
+│   │       ├── frag-ai-daemon
+│   │       ├── frag-media-worker.py
+│   │       └── studio/
 │   └── fragOS-utils/
 │       ├── fragOS-utils-9999.ebuild
 │       └── metadata.xml
+├── acct-group/
+│   └── frag-ai/
+│       ├── Manifest
+│       └── frag-ai-0.ebuild
 ├── metadata/
 │   └── layout.conf
 ├── profiles/
@@ -19,17 +33,14 @@ FragOS/
     └── ps1cfg.c
 ```
 
-## Push to `https://github.com/andiallen1979/FragOS`
+`app-misc/frag-ai` uses versioned ebuilds. The current unified Studio implementation is packaged as `frag-ai-1.3.0`; shared application assets and daemon code live in its `files/` directory.
 
-1. Extract this archive into your local `FragOS` git checkout:
-   ```bash
-   unzip fragOS-utils-gentoo-overlay.zip -d ~/FragOS
-   cd ~/FragOS
-   ```
-2. Commit and push to GitHub:
+## Publish changes to `https://github.com/andiallen1979/FragOS`
+
+Commit and push from the repository checkout:
    ```bash
    git add .
-   git commit -m "Add app-misc/fragOS-utils ebuild and ps1cfg v1.6.0 source"
+   git commit -m "Update FragOS overlay packages"
    git push -u origin main
    ```
 
@@ -43,13 +54,14 @@ FragOS/
    sync-uri = https://github.com/andiallen1979/FragOS.git
    auto-sync = yes
    ```
-2. Sync and unmask the live `9999` ebuild:
+2. Sync and accept the testing keyword for `frag-ai`:
    ```bash
    emaint sync -r FragOS
    mkdir -p /etc/portage/package.accept_keywords
-   echo "app-misc/fragOS-utils **" >> /etc/portage/package.accept_keywords/fragOS-utils
+   echo "app-misc/frag-ai **" >> /etc/portage/package.accept_keywords/frag-ai
    ```
-3. Emerge `fragOS-utils`:
+3. Install Frag-AI and its account group:
    ```bash
-   emerge -av app-misc/fragOS-utils
+   emerge -av app-misc/frag-ai
    ```
+   Then add your user to `frag-ai`, start Ollama, run `emerge --config app-misc/frag-ai` to pull the default models, and enable `frag-ai-studio.service` for your user. To enable image/audio/video jobs, run `frag-ai-media-setup` once in that user account. Enable Portage's `cuda` USE flag on supported systems for PyTorch GPU acceleration.

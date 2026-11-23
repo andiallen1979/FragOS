@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PYTHON=/usr/bin/python3.12
+MEDIA_ENV="${HOME}/.local/share/frag-ai/media-venv"
+
+if [[ ! -x "${PYTHON}" ]]; then
+    echo "Python 3.12 is required. Install app-misc/frag-ai first." >&2
+    exit 1
+fi
+
+if [[ ! -x "${MEDIA_ENV}/bin/python" ]]; then
+    "${PYTHON}" -m venv --system-site-packages "${MEDIA_ENV}"
+fi
+
+"${MEDIA_ENV}/bin/python" -m pip install --upgrade diffusers kokoro-onnx
+"${MEDIA_ENV}/bin/python" -c 'import torch, diffusers, soundfile, kokoro_onnx; print("Frag-AI media runtime ready")'

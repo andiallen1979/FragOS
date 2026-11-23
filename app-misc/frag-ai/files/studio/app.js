@@ -31,6 +31,10 @@ document.addEventListener("keydown", e => {
   if (e.key === "F5") { e.preventDefault(); runCode(e.shiftKey ? "konsole" : "inline"); }
 });
 promptEl.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+document.getElementById("chat-attachment")?.addEventListener("change", e => {
+  const file = e.target.files?.[0];
+  document.getElementById("attachment-name").textContent = file ? file.name : "";
+});
 
 function modeFor(p) {
   if (p.endsWith(".sh")) return "shell";
@@ -146,6 +150,56 @@ async function runCode(mode) {
 
 function addMsg(r, t) { const d = document.createElement("div"); d.className = "msg " + r; d.textContent = t; chat.appendChild(d); chat.scrollTop = chat.scrollHeight; return d; }
 function stopChat() { if (chatCtrl) { chatCtrl.abort(); chatCtrl = null; } }
+function routeRequest(text, hasAttachment = false) {
+  const selected = document.getElementById("request-mode")?.value || "auto";
+  if (selected !== "auto") return selected;
+  if (hasAttachment) return "chat";
+  const make = "(?:generate|create|make|draw|paint|design|render|produce|turn .* into)";
+  if (new RegExp(`\\b${make}\\b.{0,50}\\b(video|movie|animation|animated clip|mp4|short film)\\b`, "i").test(text) || /^\s*(?:a|an|the)\s+(?:video|movie|animation)\s+of\b/i.test(text)) return "video";
+  if (new RegExp(`\\b${make}\\b.{0,50}\\b(image|picture|illustration|wallpaper|logo|photo|artwork)\\b`, "i").test(text) || /^\s*(?:a|an)\s+(?:image|picture|illustration|wallpaper|logo|photo)\s+of\b/i.test(text)) return "image";
+  if (/\b(generate|create|make|produce|record|synthesize)\b.{0,50}\b(voiceover|voice over|audio|podcast|narration|speech)\b|\b(read|speak|narrate)\b.{0,30}\b(aloud|audio|voiceover)\b/i.test(text)) return "audio";
+  if (/\b(research|investigate|look up|report|briefing|source|compare .* (for|about))\b/i.test(text)) return "research";
+  return "chat";
+}
+function imageData(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+    reader.onerror = () => reject(reader.error || new Error("Could not read image"));
+    reader.readAsDataURL(file);
+  });
+}
+function addDownload(parent, href, name) {
+  const a = document.createElement("a"); a.href = href; a.download = name; a.textContent = "Download " + name;
+  a.style.cssText = "display:inline-block;margin:5px 8px 3px 0;color:var(--acc);text-decoration:underline";
+  parent.appendChild(a); return a;
+}
+function renderMediaJob(node, id, job) {
+  node.textContent = `[${job.stage || "working"}] ${job.detail || ""}`;
+  if (job.error) { const err = document.createElement("div"); err.style.color = "var(--red)"; err.textContent = job.error; node.appendChild(err); }
+  const out = job.outputs || {}, base = "/media-files/" + encodeURIComponent(id) + "/";
+  (out.images || []).forEach(name => { const row = document.createElement("div"); row.style.marginTop = "8px"; const img = document.createElement("img"); img.src = base + encodeURIComponent(name); img.alt = name; img.style.cssText = "display:block;max-width:100%;max-height:320px;border-radius:5px"; row.appendChild(img); addDownload(row, img.src, name); node.appendChild(row); });
+  (out.audio || []).forEach(name => { const row = document.createElement("div"); const audio = document.createElement("audio"); audio.controls = true; audio.src = base + encodeURIComponent(name); row.appendChild(audio); addDownload(row, audio.src, name); node.appendChild(row); });
+  if (out.video) { const row = document.createElement("div"); const video = document.createElement("video"); video.controls = true; video.src = base + encodeURIComponent(out.video); video.style.cssText = "display:block;max-width:100%;max-height:320px"; row.appendChild(video); addDownload(row, video.src, out.video); node.appendChild(row); }
+  if (out.script) addDownload(node, base + encodeURIComponent(out.script), out.script);
+  if (!job.done && !job.error) setTimeout(() => pollMediaJob(node, id), 1800);
+}
+async function pollMediaJob(node, id) {
+  try {
+    const r = await fetch("/api/media/jobs", { headers: { "X-Token": TOKEN } });
+    const d = await r.json(), job = (d.jobs || []).find(x => x.id === id);
+    if (job) renderMediaJob(node, id, job);
+  } catch (e) { node.textContent = "Could not check generation status: " + e.message; }
+}
+async function startMediaRequest(text, model, node, mode) {
+  node.textContent = "Starting " + mode + " generation...";
+  const r = await fetch("/api/media/run", { method: "POST", headers: { "Content-Type": "application/json", "X-Token": TOKEN }, body: JSON.stringify({ prompt: text, mode, research: /\b(research|sources|look up|investigate)\b/i.test(text), llm: model }) });
+  const d = await r.json();
+  if (!r.ok || d.error || !d.job_id) throw new Error(d.error || "Could not start generation");
+  node.dataset.jobId = d.job_id;
+  node.textContent = "Queued " + d.job_id;
+  pollMediaJob(node, d.job_id);
+}
 function sendOutput() {
   const out = term.textContent.trim(); if (!out) return;
   promptEl.value = "Latest output:\n" + out + "\n\nFix any errors or continue.";
@@ -160,23 +214,44 @@ async function sendChat() {
   const sb = document.getElementById("sendBtn"), st = document.getElementById("stopBtn");
   sb.style.display = "none"; st.style.display = "inline-flex";
   chatCtrl = new AbortController();
+  const attachment = document.getElementById("chat-attachment").files?.[0] || null;
+  const route = routeRequest(text, !!attachment);
+  if (["image", "video", "audio", "research"].includes(route)) {
+    try { await startMediaRequest(text, model, wait, route); }
+    catch (e) { wait.textContent = "Generation error: " + e.message; }
+    finally { chatCtrl = null; st.style.display = "none"; sb.style.display = "inline-flex"; }
+    return;
+  }
   const p = activeTab ? activeTab.path : "/home/andi/.code/script.py", code = cm.getValue().trim();
-  const sys = "Concise coding assistant. Output ONE complete fenced code block. No Steps to Run.";
+  const sys = "You are Frag-AI, a helpful local assistant. Follow the user's natural language request. When producing code, return a complete fenced code block and explain briefly what it does. For other requests, answer directly.";
   const u = code ? `Active file (${p}):\n\`\`\`\n${code}\n\`\`\`\n\nRequest: ${text}` : text;
   try {
-    const r = await fetch("/api/chat", { method: "POST", signal: chatCtrl.signal, headers: { "Content-Type": "application/json", "X-Token": TOKEN }, body: JSON.stringify({ model, messages: [{ role: "system", content: sys }, ...history, { role: "user", content: u }] }) });
+    const userMessage = { role: "user", content: u };
+    if (attachment) {
+      if (!attachment.type.startsWith("image/")) throw new Error("Choose an image file for vision requests.");
+      if (attachment.size > 20 * 1024 * 1024) throw new Error("Image is over the 20 MB limit.");
+      userMessage.images = [await imageData(attachment)];
+    }
+    const r = await fetch("/api/chat", { method: "POST", signal: chatCtrl.signal, headers: { "Content-Type": "application/json", "X-Token": TOKEN }, body: JSON.stringify({ model, messages: [{ role: "system", content: sys }, ...history, userMessage] }) });
     const d = await r.json();
     const reply = (d.message && d.message.content) || d.error || "(empty)";
     history.push({ role: "user", content: text }, { role: "assistant", content: reply });
-    const m = reply.match(/```([a-zA-Z0-9_+-]*)\n([\s\S]*?)```/);
-    if (m) {
+    const blocks = [...reply.matchAll(/```([a-zA-Z0-9_+-]*)\n([\s\S]*?)```/g)];
+    if (blocks.length) {
+      const m = blocks[0];
       if (!activeTab) openTab("script.py", "/home/andi/.code/script.py", "");
       cm.setValue(m[2].trim() + "\n");
       wait.textContent = reply.replace(/```[a-zA-Z0-9_+-]*\n[\s\S]*?```/g, "").trim() || "Updated active file.";
+      blocks.forEach((block, index) => {
+        const lang = block[1] || "txt", ext = ({ py:"py", python:"py", js:"js", javascript:"js", sh:"sh", bash:"sh", c:"c", cpp:"cpp", html:"html", css:"css", json:"json", rust:"rs", go:"go" })[lang.toLowerCase()] || "txt";
+        const filename = "generated-code" + (index ? "-" + (index + 1) : "") + "." + ext;
+        const blob = new Blob([block[2].trim() + "\n"], { type: "text/plain;charset=utf-8" });
+        addDownload(wait, URL.createObjectURL(blob), filename);
+      });
       term.textContent = "Updated from " + model + ". Press F5 or click Run / Konsole.";
     } else { wait.textContent = reply; }
   } catch (e) { wait.textContent = (e.name === "AbortError") ? "[Stopped]" : "Chat error: " + e; }
-  finally { chatCtrl = null; st.style.display = "none"; sb.style.display = "inline-flex"; }
+  finally { chatCtrl = null; document.getElementById("chat-attachment").value = ""; document.getElementById("attachment-name").textContent = ""; st.style.display = "none"; sb.style.display = "inline-flex"; }
 }
 
 async function init() {

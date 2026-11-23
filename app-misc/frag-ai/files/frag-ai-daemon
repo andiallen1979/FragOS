@@ -9,6 +9,284 @@ USER_HOME = os.path.expanduser("~")
 STAGED_DIR = "/opt/open-webui/data/workspace/staged_saves"
 LAUNCHER = "/usr/local/bin/owui-konsole-run"
 MEDIA_DIR = os.path.expanduser("~/MediaDirector")
+MEDIA_PYTHON = os.path.expanduser("~/.local/share/frag-ai/media-venv/bin/python")
+
+CONFIG_FILE = os.path.expanduser("~/.config/frag-ai/studio-config.json")
+CODE_ROOT_DEFAULT = os.path.expanduser("~/.code")
+ARCHIVE_ROOT_DEFAULT = os.path.expanduser("~/.code-archives")
+
+
+def project_pro_path(code_root, project_name):
+    safe = os.path.basename(project_name)
+    return os.path.join(code_root, safe, f"{safe}.frag_pro")
+
+def load_project_meta(code_root, project_name, global_cfg):
+    safe = os.path.basename(project_name)
+    pdir = os.path.join(code_root, safe)
+    pro_file = project_pro_path(code_root, safe)
+    meta = {
+        "name": safe,
+        "pro_file": f"{safe}/{safe}.frag_pro",
+        "version": "1.0.0",
+        "repo_dir": global_cfg.get("repo_dir", os.path.expanduser("~/FragOS")),
+        "pkg_target": global_cfg.get("default_pkg", "app-misc/frag-ai"),
+        "auto_push": bool(global_cfg.get("auto_push", False)),
+    }
+    if os.path.isfile(pro_file):
+        try:
+            with open(pro_file, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    meta.update({k: v for k, v in loaded.items() if k in ("version", "repo_dir", "pkg_target", "auto_push")})
+        except Exception:
+            pass
+    elif os.path.isdir(pdir):
+        save_project_meta(code_root, safe, meta)
+    return meta
+
+def save_project_meta(code_root, project_name, meta):
+    safe = os.path.basename(project_name)
+    pdir = os.path.join(code_root, safe)
+    os.makedirs(pdir, exist_ok=True)
+    pro_file = project_pro_path(code_root, safe)
+    payload = {
+        "format": "frag-project-v1",
+        "name": safe,
+        "version": meta.get("version", "1.0.0"),
+        "repo_dir": meta.get("repo_dir", os.path.expanduser("~/FragOS")),
+        "pkg_target": meta.get("pkg_target", "app-misc/frag-ai"),
+        "auto_push": bool(meta.get("auto_push", False)),
+    }
+    with open(pro_file, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    return payload
+
+def load_studio_cfg():
+    cfg = {
+        "code_root": CODE_ROOT_DEFAULT,
+        "archive_root": ARCHIVE_ROOT_DEFAULT,
+        "repo_dir": os.path.expanduser("~/FragOS"),
+        "repo_remote": "origin",
+        "repo_branch": "main",
+        "default_pkg": "app-misc/frag-ai",
+        "auto_push": False,
+    }
+    try:
+        if os.path.isfile(CONFIG_FILE):
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg.update(json.load(f))
+    except Exception:
+        pass
+    os.makedirs(cfg["code_root"], exist_ok=True)
+    os.makedirs(cfg["archive_root"], exist_ok=True)
+    return cfg
+
+def save_studio_cfg(cfg):
+    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+
+
+PRESETS_FILE = os.path.expanduser("~/.config/frag-ai/presets.json")
+
+DEFAULT_PRESETS = [
+    {
+        "id": "sys-c-gentoo",
+        "name": "Systems & C / Gentoo Engineer",
+        "category": "Coding & Systems",
+        "model": "qwen2.5-coder:7b",
+        "temperature": 0.2,
+        "system_prompt": "You are a systems engineer focused on C, POSIX termios, Linux kernel/userspace, and Gentoo Portage packaging. Give exact, deterministic commands and clean code."
+    },
+    {
+        "id": "deep-code-arch",
+        "name": "Deep Code & Architecture",
+        "category": "Coding & Systems",
+        "model": "qwen3.5:9b",
+        "temperature": 0.25,
+        "system_prompt": "Analyze architecture, edge cases, data flow, and concurrency carefully before writing code. Keep changes modular and verifiable."
+    },
+    {
+        "id": "fast-autocomplete",
+        "name": "Fast Local Helper (Low VRAM)",
+        "category": "Quick & Lightweight",
+        "model": "qwen2.5-coder:1.5b",
+        "temperature": 0.2,
+        "system_prompt": "Be concise, direct, and fast. Provide immediate answers or short snippets with minimal fluff."
+    },
+    {
+        "id": "media-showrunner",
+        "name": "Media Director & Scriptwriter",
+        "category": "Media & Storytelling",
+        "model": "qwen3.5:9b",
+        "temperature": 0.7,
+        "system_prompt": "You are a media director and scriptwriter. Craft vivid narration, structured scene breakdowns, and clean visual prompts without text overlays."
+    },
+    {
+        "id": "fiction-narrator",
+        "name": "Literary & Narrated Fiction",
+        "category": "Media & Storytelling",
+        "model": "mistral:latest",
+        "temperature": 0.85,
+        "system_prompt": "Write evocative, atmospheric prose and dramatic narration with strong pacing, sensory detail, and clear voice cadence."
+    },
+    {
+        "id": "research-analyst",
+        "name": "Research & Technical Synthesis",
+        "category": "Research & Writing",
+        "model": "qwen2.5:7b",
+        "temperature": 0.3,
+        "system_prompt": "Synthesize facts clearly, highlight trade-offs and unknowns, and organize findings into structured comparisons and actionable takeaways."
+    },
+    {
+        "id": "vision-inspector",
+        "name": "UI & Hardware Vision Inspector",
+        "category": "Vision & Multimodal",
+        "model": "qwen3-vl:8b",
+        "temperature": 0.2,
+        "system_prompt": "Inspect screenshots, layouts, schematics, and UI states carefully. Report concrete visual discrepancies, labels, and layout issues."
+    },
+    {
+        "id": "embedded-mcu",
+        "name": "Embedded & Microcontroller Lab",
+        "category": "Hardware & Embedded",
+        "model": "qwen2.5-coder:7b",
+        "temperature": 0.2,
+        "system_prompt": "Focus on bare-metal and microcontroller development, register/pin timing, memory/VRAM constraints, bus signaling, and deterministic firmware."
+    }
+]
+
+def load_presets_state():
+    cfg = load_studio_cfg() if "load_studio_cfg" in globals() else {}
+    custom = []
+    removed = []
+    if os.path.isfile(PRESETS_FILE):
+        try:
+            data = json.load(open(PRESETS_FILE, encoding="utf-8"))
+            custom = data.get("custom", [])
+            removed = data.get("removed", [])
+        except Exception:
+            pass
+    merged = [p for p in DEFAULT_PRESETS if p["id"] not in removed] + custom
+    return {
+        "presets": merged,
+        "active_preset": cfg.get("active_preset", ""),
+        "online_models": cfg.get("online_models", {
+            "enabled": False,
+            "provider": "github",
+            "endpoint": "https://models.github.ai/inference",
+            "token_env": "GITHUB_TOKEN",
+            "models": ["gpt-4o-mini", "Meta-Llama-3.1-8B-Instruct"]
+        }),
+    }
+
+def save_presets_state(custom, removed):
+    os.makedirs(os.path.dirname(PRESETS_FILE), exist_ok=True)
+    with open(PRESETS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"custom": custom, "removed": removed}, f, indent=2)
+
+
+def _probe_version_candidates(cmd_name, bin_path):
+    found = []
+    # Check versioned binaries on PATH matching cmd_name-* (e.g., python3.12, python3.14, gcc-14, clang-19)
+    path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+    seen = set()
+    candidates = []
+    if bin_path:
+        candidates.append((cmd_name, bin_path))
+    for d in path_dirs:
+        if not os.path.isdir(d):
+            continue
+        try:
+            for fn in sorted(os.listdir(d)):
+                if fn == cmd_name or fn.startswith(cmd_name + "-"):
+                    fp = os.path.join(d, fn)
+                    if os.path.isfile(fp) and os.access(fp, os.X_OK):
+                        candidates.append((fn, fp))
+        except Exception:
+            pass
+    for label_bin, fp in candidates:
+        real_fp = os.path.realpath(fp)
+        if real_fp in seen:
+            continue
+        seen.add(real_fp)
+        ver_line = ""
+        try:
+            res = subprocess.run([fp, "--version"], capture_output=True, text=True, timeout=2)
+            lines = (res.stdout or res.stderr or "").strip().splitlines()
+            if lines:
+                ver_line = lines[0].strip()[:90]
+        except Exception:
+            ver_line = label_bin
+        found.append({"bin": label_bin, "path": fp, "version": ver_line or label_bin})
+    return found
+
+def detect_installed_languages_v2():
+    out = []
+    for spec in LANGUAGE_PROBES:
+        all_cmds = [spec["cmd"]] + spec.get("alt_cmds", [])
+        versions = []
+        seen_paths = set()
+        for c in all_cmds:
+            p = shutil.which(c)
+            if p:
+                for v in _probe_version_candidates(c, p):
+                    if v["path"] not in seen_paths:
+                        seen_paths.add(v["path"])
+                        versions.append(v)
+        if not versions:
+            continue
+        primary = versions[0]
+        out.append({
+            "id": spec["id"],
+            "label": spec["label"],
+            "bin": primary["bin"],
+            "path": primary["path"],
+            "version": primary["version"],
+            "versions": versions,
+            "starter": spec["starter"],
+            "desc": spec["desc"],
+        })
+    return out
+
+def sync_tracked_files_in_pro(code_root, project_name, global_cfg):
+    safe = os.path.basename(project_name)
+    pdir = os.path.join(code_root, safe)
+    pro_file = project_pro_path(code_root, safe)
+    meta = load_project_meta(code_root, safe, global_cfg)
+    pro_name = os.path.basename(pro_file)
+    disk_files = []
+    if os.path.isdir(pdir):
+        for r, _, fs in os.walk(pdir):
+            for fn in sorted(fs):
+                if fn == pro_name:
+                    continue
+                rel_in_proj = os.path.relpath(os.path.join(r, fn), pdir)
+                disk_files.append(rel_in_proj)
+    tracked = meta.get("tracked_files")
+    if not isinstance(tracked, list):
+        tracked = list(disk_files)
+    else:
+        tracked = [f for f in tracked if f in disk_files]
+        for df in disk_files:
+            if df not in tracked:
+                tracked.append(df)
+    meta["tracked_files"] = tracked
+    with open(pro_file, "r", encoding="utf-8") as f:
+        raw = json.load(f) if os.path.isfile(pro_file) else {}
+    raw.update({
+        "format": "frag-project-v1",
+        "name": safe,
+        "version": meta.get("version", "1.0.0"),
+        "repo_dir": meta.get("repo_dir", global_cfg.get("repo_dir", os.path.expanduser("~/FragOS"))),
+        "pkg_target": meta.get("pkg_target", global_cfg.get("default_pkg", "app-misc/frag-ai")),
+        "auto_push": bool(meta.get("auto_push", global_cfg.get("auto_push", False))),
+        "tracked_files": tracked,
+    })
+    with open(pro_file, "w", encoding="utf-8") as f:
+        json.dump(raw, f, indent=2)
+    return raw
+
 OLLAMA_URL = "http://localhost:11434"
 
 import secrets
@@ -232,6 +510,46 @@ class Handler(BaseHTTPRequestHandler):
                 jb = json.load(open(jb_p, encoding="utf-8")) if os.path.exists(jb_p) else {}
                 jobs.append({"id": d, "prompt": jb.get("prompt", ""), "mode": jb.get("mode", ""), **st})
             self._json({"jobs": jobs}); return
+        if parsed.path == "/api/studio/config":
+            self._json(load_studio_cfg()); return
+        if parsed.path == "/api/projects":
+            cfg = load_studio_cfg()
+            root = os.path.abspath(cfg["code_root"])
+            os.makedirs(root, exist_ok=True)
+            projects = []
+            for name in sorted(os.listdir(root)):
+                p = os.path.join(root, name)
+                if os.path.isdir(p) and not name.startswith("."):
+                    meta = load_project_meta(root, name, cfg)
+                    files = []
+                    for r, _, fs in os.walk(p):
+                        for fn in sorted(fs):
+                            rel = os.path.relpath(os.path.join(r, fn), root)
+                            files.append(rel)
+                    projects.append({
+                        "name": name,
+                        "path": p,
+                        "pro_file": meta["pro_file"],
+                        "version": meta["version"],
+                        "repo_dir": meta["repo_dir"],
+                        "pkg_target": meta["pkg_target"],
+                        "auto_push": meta["auto_push"],
+                        "files": files,
+                    })
+            self._json({"root": root, "projects": projects, "config": cfg}); return
+        if parsed.path == "/api/languages":
+            self._json({"languages": detect_installed_languages_v2()}); return
+        if parsed.path == "/api/project/file-content":
+            cfg = load_studio_cfg()
+            qs = urllib.parse.parse_qs(parsed.query)
+            proj = os.path.basename((qs.get("project") or [""])[0])
+            rel = (qs.get("rel") or [""])[0].lstrip("/")
+            pdir = os.path.abspath(os.path.join(cfg["code_root"], proj))
+            target = os.path.abspath(os.path.join(pdir, rel))
+            if not proj or not target.startswith(pdir + os.sep) or not os.path.isfile(target):
+                self._json({"error": "File not found"}, 404); return
+            with open(target, "r", encoding="utf-8", errors="replace") as f:
+                self._json({"ok": True, "project": proj, "rel": rel, "full_path": target, "content": f.read()}); return
         if parsed.path == "/api/tree":
             self._json({"root": DEFAULT_CWD, "tree": list_tree(DEFAULT_CWD)}); return
         if parsed.path == "/api/file":
@@ -248,16 +566,378 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("X-Token") != TOKEN: self._json({"error": "forbidden"}, 403); return
         data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode("utf-8"))
         if self.path == "/api/media/run":
+            mode = data.get("mode", "video")
+            if mode in ("image", "video", "audio") and not os.path.isfile(MEDIA_PYTHON):
+                self._json({"error": "Media runtime is not set up. Run frag-ai-media-setup in your user account, then retry."}, 503); return
             os.makedirs(MEDIA_DIR, exist_ok=True)
-            jid = f"job_{int(time.time())}"
+            jid = f"job_{time.time_ns()}"
             jd = os.path.join(MEDIA_DIR, jid)
             os.makedirs(jd, exist_ok=True)
             with open(os.path.join(jd, "job.json"), "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             with open(os.path.join(jd, "status.json"), "w", encoding="utf-8") as f:
                 json.dump({"stage": "queued", "detail": "Starting worker...", "done": False}, f)
-            subprocess.Popen([sys.executable, "/usr/libexec/frag-media-worker.py", jd])
+            worker_python = MEDIA_PYTHON if mode in ("image", "video", "audio") else sys.executable
+            subprocess.Popen([worker_python, "/usr/libexec/frag-media-worker.py", jd])
             self._json({"ok": True, "job_id": jid}); return
+        if self.path == "/api/studio/config":
+            cfg = load_studio_cfg()
+            for k in ("code_root", "archive_root", "repo_dir", "repo_remote", "repo_branch", "default_pkg", "auto_push"):
+                if k in data:
+                    cfg[k] = data[k]
+            save_studio_cfg(cfg)
+            self._json({"ok": True, "config": cfg}); return
+        
+def _write_starter_boilerplate(pdir, name, lang_id, selected_bin, selected_ver):
+    lang = (lang_id or "python").strip().lower()
+    templates = {
+        "python": (
+            "main.py",
+            f'#!/usr/bin/env {selected_bin or "python3"}\n'
+            f'"""Starter application for {name} ({selected_ver or "python3"})."""\n\n\n'
+            f'def main() -> None:\n'
+            f'    print("Hello from {name}")\n\n\n'
+            f'if __name__ == "__main__":\n'
+            f'    main()\n',
+        ),
+        "c": (
+            "main.c",
+            f'#include <stdio.h>\n\n'
+            f'int main(void) {{\n'
+            f'    printf("Hello from {name} ({selected_bin or "cc"})\\n");\n'
+            f'    return 0;\n'
+            f'}}\n',
+        ),
+        "cpp": (
+            "main.cpp",
+            f'#include <iostream>\n\n'
+            f'int main() {{\n'
+            f'    std::cout << "Hello from {name} ({selected_bin or "c++"})\\n";\n'
+            f'    return 0;\n'
+            f'}}\n',
+        ),
+        "rust": (
+            "main.rs",
+            f'fn main() {{\n'
+            f'    println!("Hello from {name} ({selected_bin or "rustc"})");\n'
+            f'}}\n',
+        ),
+        "go": (
+            "main.go",
+            f'package main\n\nimport "fmt"\n\n'
+            f'func main() {{\n'
+            f'\tfmt.Println("Hello from {name} ({selected_bin or "go"})")\n'
+            f'}}\n',
+        ),
+        "shell": (
+            "run.sh",
+            f'#!/usr/bin/env {selected_bin or "bash"}\nset -euo pipefail\n\n'
+            f'echo "Hello from {name}"\n',
+        ),
+        "lua": (
+            "main.lua",
+            f'print("Hello from {name} ({selected_bin or "lua"})")\n',
+        ),
+        "javascript": (
+            "index.js",
+            f'console.log("Hello from {name} ({selected_bin or "node"})");\n',
+        ),
+        "typescript": (
+            "index.ts",
+            f'const appName: string = "{name}";\nconsole.log("Hello from", appName);\n',
+        ),
+        "zig": (
+            "main.zig",
+            f'const std = @import("std");\n\npub fn main() void {{\n'
+            f'    std.debug.print("Hello from {name}\\n", .{{}});\n}}\n',
+        ),
+    }
+    fname, content = templates.get(lang, templates["python"])
+    target = os.path.join(pdir, fname)
+    with open(target, "w", encoding="utf-8") as f:
+        f.write(content)
+    return fname, content
+
+    if self.path == "/api/projects/create":
+        cfg = load_studio_cfg()
+        name = os.path.basename((data.get("name") or "").strip())
+        if not name:
+            self._json({"error": "Project name required"}, 400); return
+        pdir = os.path.abspath(os.path.join(cfg["code_root"], name))
+        if not pdir.startswith(os.path.abspath(cfg["code_root"]) + os.sep):
+            self._json({"error": "Invalid project path"}, 400); return
+        os.makedirs(pdir, exist_ok=True)
+        save_project_meta(cfg["code_root"], name, {
+            "version": (data.get("version") or "1.0.0").strip(),
+            "repo_dir": data.get("repo_dir") or cfg.get("repo_dir", os.path.expanduser("~/FragOS")),
+            "pkg_target": data.get("pkg_target") or cfg.get("default_pkg", "app-misc/frag-ai"),
+            "auto_push": bool(data.get("auto_push", cfg.get("auto_push", False))),
+        })
+        starter = os.path.join(pdir, "main.py")
+        if not os.path.exists(starter):
+            with open(starter, "w", encoding="utf-8") as f:
+                f.write("#!/usr/bin/env python3\n\ndef main():\n    print('Editing in ~/.code/" + name + "')\n\nif __name__ == '__main__':\n    main()\n")
+        self._json({"ok": True, "project": name, "pro_file": f"{name}/{name}.frag_pro"}); return
+        if self.path == "/api/projects/meta":
+            cfg = load_studio_cfg()
+            name = os.path.basename((data.get("project") or "").strip())
+            pdir = os.path.abspath(os.path.join(cfg["code_root"], name))
+            if not name or not os.path.isdir(pdir):
+                self._json({"error": "Project not found"}, 404); return
+            cur = load_project_meta(cfg["code_root"], name, cfg)
+            for k in ("version", "repo_dir", "pkg_target", "auto_push"):
+                if k in data:
+                    cur[k] = data[k]
+            saved = save_project_meta(cfg["code_root"], name, cur)
+            self._json({"ok": True, "project": name, "meta": saved}); return
+        if self.path == "/api/projects/assign-file":
+            cfg = load_studio_cfg()
+            src_rel = (data.get("src_rel") or "").lstrip("/")
+            project = os.path.basename(data.get("project") or "")
+            target_sub = (data.get("target_sub") or "").lstrip("/")
+            repo_target = (data.get("repo_target") or "").lstrip("/")
+            src_full = os.path.abspath(os.path.join(cfg["code_root"], src_rel))
+            if not src_full.startswith(os.path.abspath(cfg["code_root"])) or not os.path.isfile(src_full):
+                self._json({"error": "Source file not found"}, 404); return
+            dests = []
+            if project:
+                p_dest = os.path.abspath(os.path.join(cfg["code_root"], project, target_sub or os.path.basename(src_full)))
+                if os.path.isdir(p_dest):
+                    p_dest = os.path.join(p_dest, os.path.basename(src_full))
+                os.makedirs(os.path.dirname(p_dest), exist_ok=True)
+                shutil.copy2(src_full, p_dest)
+                dests.append(p_dest)
+            if repo_target and os.path.isdir(cfg["repo_dir"]):
+                r_dest = os.path.abspath(os.path.join(cfg["repo_dir"], repo_target))
+                if r_dest.startswith(os.path.abspath(cfg["repo_dir"])):
+                    if os.path.isdir(r_dest):
+                        r_dest = os.path.join(r_dest, os.path.basename(src_full))
+                    os.makedirs(os.path.dirname(r_dest), exist_ok=True)
+                    shutil.copy2(src_full, r_dest)
+                    dests.append(r_dest)
+            self._json({"ok": True, "copied": dests}); return
+        if self.path == "/api/projects/package-local":
+            cfg = load_studio_cfg()
+            project = os.path.basename(data.get("project") or "")
+            version = (data.get("version") or "1.0.0").strip()
+            pdir = os.path.abspath(os.path.join(cfg["code_root"], project))
+            if not project or not os.path.isdir(pdir):
+                self._json({"error": "Project not found"}, 404); return
+            pkg_out = os.path.join(cfg["archive_root"], "packages")
+            os.makedirs(pkg_out, exist_ok=True)
+            tar_path = os.path.join(pkg_out, f"{project}-{version}.tar.gz")
+            with tarfile.open(tar_path, "w:gz") as tf:
+                tf.add(pdir, arcname=f"{project}-{version}")
+            repo_dir = os.path.expanduser(cfg["repo_dir"])
+            staged_files = []
+            pkg_rel = (data.get("pkg_rel") or cfg.get("default_pkg") or "").strip("/")
+            if pkg_rel and os.path.isdir(repo_dir):
+                files_dir = os.path.join(repo_dir, pkg_rel, "files")
+                os.makedirs(files_dir, exist_ok=True)
+                for fn in os.listdir(pdir):
+                    fp = os.path.join(pdir, fn)
+                    if os.path.isfile(fp):
+                        tp = os.path.join(files_dir, fn)
+                        shutil.copy2(fp, tp)
+                        staged_files.append(tp)
+            self._json({"ok": True, "package": tar_path, "staged": staged_files}); return
+        if self.path == "/api/projects/push":
+            cfg = load_studio_cfg()
+            repo_dir = os.path.expanduser(cfg["repo_dir"])
+            msg = (data.get("message") or f"code-studio: update {data.get('project') or 'workspace'}").strip()
+            if not os.path.isdir(repo_dir):
+                self._json({"error": f"Repo directory missing: {repo_dir}"}, 400); return
+            cmds = [
+                ["git", "-C", repo_dir, "add", "-A"],
+                ["git", "-C", repo_dir, "commit", "-m", msg],
+                ["git", "-C", repo_dir, "push", cfg.get("repo_remote", "origin"), cfg.get("repo_branch", "main")],
+            ]
+            logs = []
+            for c in cmds:
+                res = subprocess.run(c, capture_output=True, text=True)
+                logs.append({"cmd": " ".join(c), "rc": res.returncode, "out": (res.stdout + res.stderr).strip()})
+                if c[2] == "commit" and res.returncode != 0 and "nothing to commit" in (res.stdout + res.stderr).lower():
+                    continue
+                if res.returncode != 0 and c[2] != "commit":
+                    self._json({"ok": False, "error": res.stderr or res.stdout, "logs": logs}, 500); return
+            self._json({"ok": True, "logs": logs}); return
+        if self.path == "/api/projects/archive":
+            cfg = load_studio_cfg()
+            project = os.path.basename(data.get("project") or "")
+            version = (data.get("version") or time.strftime("%Y%m%d-%H%M%S")).strip()
+            pdir = os.path.abspath(os.path.join(cfg["code_root"], project))
+            if not project or not os.path.isdir(pdir):
+                self._json({"error": "Project not found"}, 404); return
+            os.makedirs(cfg["archive_root"], exist_ok=True)
+            arch_path = os.path.join(cfg["archive_root"], f"{project}_v{version}.tar.gz")
+            with tarfile.open(arch_path, "w:gz") as tf:
+                tf.add(pdir, arcname=project)
+            self._json({"ok": True, "archive": arch_path}); return
+        if self.path == "/api/projects/delete":
+            cfg = load_studio_cfg()
+            project = os.path.basename(data.get("project") or "")
+            pdir = os.path.abspath(os.path.join(cfg["code_root"], project))
+            if not project or not pdir.startswith(os.path.abspath(cfg["code_root"]) + os.sep) or not os.path.isdir(pdir):
+                self._json({"error": "Project not found"}, 404); return
+            if data.get("archive_first", True):
+                os.makedirs(cfg["archive_root"], exist_ok=True)
+                arch_path = os.path.join(cfg["archive_root"], f"{project}_deleted_{time.strftime('%Y%m%d-%H%M%S')}.tar.gz")
+                with tarfile.open(arch_path, "w:gz") as tf:
+                    tf.add(pdir, arcname=project)
+            shutil.rmtree(pdir)
+            self._json({"ok": True, "deleted": project}); return
+        if self.path == "/api/presets/apply":
+            pid = (data.get("id") or "").strip()
+            st = load_presets_state()
+            chosen = next((p for p in st["presets"] if p["id"] == pid), None)
+            if not chosen and data.get("preset"):
+                chosen = data["preset"]
+            if not chosen:
+                self._json({"error": "Preset not found"}, 404); return
+            cfg = load_studio_cfg()
+            cfg["active_preset"] = chosen["id"]
+            cfg["active_preset_data"] = chosen
+            save_studio_cfg(cfg)
+            self._json({"ok": True, "active_preset": chosen}); return
+        if self.path == "/api/presets/remove":
+            pid = (data.get("id") or "").strip()
+            custom, removed = [], []
+            if os.path.isfile(PRESETS_FILE):
+                try:
+                    raw = json.load(open(PRESETS_FILE, encoding="utf-8"))
+                    custom = raw.get("custom", [])
+                    removed = raw.get("removed", [])
+                except Exception:
+                    pass
+            custom = [p for p in custom if p.get("id") != pid]
+            if any(p["id"] == pid for p in DEFAULT_PRESETS) and pid not in removed:
+                removed.append(pid)
+            save_presets_state(custom, removed)
+            cfg = load_studio_cfg()
+            if cfg.get("active_preset") == pid:
+                cfg["active_preset"] = ""
+                cfg.pop("active_preset_data", None)
+                save_studio_cfg(cfg)
+            self._json({"ok": True, "removed_id": pid}); return
+        if self.path == "/api/online-models/config":
+            cfg = load_studio_cfg()
+            cfg["online_models"] = data
+            save_studio_cfg(cfg)
+            self._json({"ok": True, "online_models": cfg["online_models"]}); return
+        if self.path == "/api/projects/create-boilerplate":
+            cfg = load_studio_cfg()
+            name = os.path.basename((data.get("name") or "").strip())
+            lang_id = (data.get("lang_id") or "python").strip()
+            selected_bin = (data.get("selected_bin") or "").strip()
+            selected_ver = (data.get("selected_ver") or "").strip()
+            if not name:
+                self._json({"error": "Project name required"}, 400); return
+            root_abs = os.path.abspath(cfg["code_root"])
+            pdir = os.path.abspath(os.path.join(root_abs, name))
+            if not pdir.startswith(root_abs + os.sep):
+                self._json({"error": "Invalid project name"}, 400); return
+            spec = next((x for x in LANGUAGE_PROBES if x["id"] == lang_id), LANGUAGE_PROBES[2])
+            os.makedirs(pdir, exist_ok=True)
+            starter = spec["starter"]
+            starter_path = os.path.join(pdir, starter)
+            readme_path = os.path.join(pdir, "README.md")
+            boilerplates = {
+                "c": f"#include <stdio.h>\n\nint main(void) {{\n    printf(\"Project {name} ({selected_bin or 'cc'})\\n\");\n    return 0;\n}}\n",
+                "cpp": f"#include <iostream>\n\nint main() {{\n    std::cout << \"Project {name} ({selected_bin or 'c++'})\\n\";\n    return 0;\n}}\n",
+                "python": f"#!/usr/bin/env {selected_bin or 'python3'}\n\"\"\"{name} boilerplate\"\"\"\n\ndef main() -> None:\n    print(\"Running {name} ({selected_ver or 'python3'})\")\n\nif __name__ == \"__main__\":\n    main()\n",
+                "rust": f"fn main() {{\n    println!(\"Running {name} ({selected_bin or 'rustc'})\");\n}}\n",
+                "go": f"package main\n\nimport \"fmt\"\n\nfunc main() {{\n    fmt.Println(\"Running {name} ({selected_bin or 'go'})\")\n}}\n",
+                "shell": f"#!/usr/bin/env {selected_bin or 'bash'}\nset -euo pipefail\necho \"Running {name}\"\n",
+                "lua": f"print(\"Running {name} ({selected_bin or 'lua'})\")\n",
+                "javascript": f"console.log(\"Running {name} ({selected_bin or 'node'})\");\n",
+                "typescript": f"const projectName: string = \"{name}\";\nconsole.log(\"Running\", projectName);\n",
+                "zig": f"const std = @import(\"std\");\npub fn main() void {{\n    std.debug.print(\"Running {name}\\n\", .{{}});\n}}\n",
+                "llvm": f"#include <stdio.h>\n\nint main(void) {{\n    printf(\"LLVM boilerplate for {name}\\n\");\n    return 0;\n}}\n",
+            }
+            if not os.path.exists(starter_path):
+                with open(starter_path, "w", encoding="utf-8") as f:
+                    f.write(boilerplates.get(lang_id, f"// {name}\n"))
+            if not os.path.exists(readme_path):
+                with open(readme_path, "w", encoding="utf-8") as f:
+                    f.write(f"# {name}\n\n- Language: {spec['label']}\n- Toolchain: `{selected_bin or spec['cmd']}` ({selected_ver})\n")
+            pro_file = project_pro_path(root_abs, name)
+            with open(pro_file, "w", encoding="utf-8") as f:
+                json.dump({
+                    "format": "frag-project-v1",
+                    "name": name,
+                    "language": lang_id,
+                    "toolchain_bin": selected_bin or spec["cmd"],
+                    "toolchain_version": selected_ver,
+                    "version": "1.0.0",
+                    "repo_dir": cfg.get("repo_dir", os.path.expanduser("~/FragOS")),
+                    "pkg_target": cfg.get("default_pkg", "app-misc/frag-ai"),
+                    "auto_push": bool(cfg.get("auto_push", False)),
+                    "tracked_files": [starter, "README.md"],
+                }, f, indent=2)
+            with open(starter_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self._json({
+                "ok": True,
+                "project": name,
+                "open_rel": f"{name}/{starter}",
+                "content": content,
+            }); return
+        if self.path == "/api/projects/add-file":
+            cfg = load_studio_cfg()
+            proj = os.path.basename((data.get("project") or "").strip())
+            rel = (data.get("rel") or "").strip().lstrip("/")
+            content = data.get("content", "")
+            pdir = os.path.abspath(os.path.join(cfg["code_root"], proj))
+            target = os.path.abspath(os.path.join(pdir, rel))
+            if not proj or not rel or not target.startswith(pdir + os.sep):
+                self._json({"error": "Invalid project or file path"}, 400); return
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            if not os.path.exists(target):
+                with open(target, "w", encoding="utf-8") as f:
+                    f.write(content)
+            meta = sync_tracked_files_in_pro(cfg["code_root"], proj, cfg)
+            if rel not in meta["tracked_files"]:
+                meta["tracked_files"].append(rel)
+                with open(project_pro_path(cfg["code_root"], proj), "w", encoding="utf-8") as f:
+                    json.dump(meta, f, indent=2)
+            self._json({"ok": True, "rel": f"{proj}/{rel}", "tracked_files": meta["tracked_files"]}); return
+        if self.path == "/api/projects/remove-file":
+            cfg = load_studio_cfg()
+            proj = os.path.basename((data.get("project") or "").strip())
+            rel = (data.get("rel") or "").strip().lstrip("/")
+            delete_disk = bool(data.get("delete_disk", True))
+            pdir = os.path.abspath(os.path.join(cfg["code_root"], proj))
+            target = os.path.abspath(os.path.join(pdir, rel))
+            if not proj or not rel or not target.startswith(pdir + os.sep):
+                self._json({"error": "Invalid project or file path"}, 400); return
+            if delete_disk and os.path.isfile(target):
+                os.remove(target)
+            pro_file = project_pro_path(cfg["code_root"], proj)
+            if os.path.isfile(pro_file):
+                raw = json.load(open(pro_file, encoding="utf-8"))
+                raw["tracked_files"] = [x for x in raw.get("tracked_files", []) if x != rel]
+                with open(pro_file, "w", encoding="utf-8") as f:
+                    json.dump(raw, f, indent=2)
+            self._json({"ok": True, "removed": rel}); return
+        if self.path == "/api/projects/tar-with-pro":
+            cfg = load_studio_cfg()
+            proj = os.path.basename((data.get("project") or "").strip())
+            pdir = os.path.abspath(os.path.join(cfg["code_root"], proj))
+            pro_file = project_pro_path(cfg["code_root"], proj)
+            if not proj or not os.path.isdir(pdir):
+                self._json({"error": "Project not found"}, 404); return
+            meta = sync_tracked_files_in_pro(cfg["code_root"], proj, cfg)
+            arch_dir = os.path.join(cfg["archive_root"], "bundles")
+            os.makedirs(arch_dir, exist_ok=True)
+            tar_path = os.path.join(arch_dir, f"{proj}_bundle_{time.strftime('%Y%m%d-%H%M%S')}.tar.gz")
+            with tarfile.open(tar_path, "w:gz") as tf:
+                if os.path.isfile(pro_file):
+                    tf.add(pro_file, arcname=f"{proj}/{os.path.basename(pro_file)}")
+                for tf_rel in meta.get("tracked_files", []):
+                    fp = os.path.abspath(os.path.join(pdir, tf_rel))
+                    if fp.startswith(pdir + os.sep) and os.path.isfile(fp):
+                        tf.add(fp, arcname=f"{proj}/{tf_rel}")
+            self._json({"ok": True, "tar_path": tar_path, "tracked_count": len(meta.get("tracked_files", []))}); return
         if self.path == "/api/chat":
             payload = json.dumps({"model": data.get("model"), "messages": data.get("messages", []), "stream": False}).encode("utf-8")
             req = urllib.request.Request(f"{OLLAMA_URL}/api/chat", data=payload, headers={"Content-Type": "application/json"})

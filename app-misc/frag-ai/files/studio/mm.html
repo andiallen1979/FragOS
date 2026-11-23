@@ -1,65 +1,256 @@
 <!DOCTYPE html>
 <html lang="en"><head>
-<meta charset="utf-8"><title>Frag-MM — Model Manager</title>
+<meta charset="utf-8"><title>Models &amp; Presets — Frag-AI</title>
 <link rel="stylesheet" href="/style.css">
 <style>
   body{display:flex;flex-direction:column;height:100vh;overflow:hidden}
-  #mm-body{display:flex;flex:1;overflow:hidden}
-  #mm-main{flex:1;padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:14px}
-  #mm-side{width:340px;background:var(--side);border-left:1px solid var(--bdr);padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:12px}
-  .card{background:var(--side);border:1px solid var(--bdr);border-radius:6px;padding:12px}
-  .card h3{margin:0 0 10px 0;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--acc)}
-  table{width:100%;border-collapse:collapse;font-size:12.5px}
-  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--bdr)}
-  .badge{padding:2px 6px;border-radius:4px;font-size:11px;background:var(--bg);border:1px solid var(--bdr)}
-  .badge.live{border-color:var(--grn);color:var(--grn)}
-  .preset{display:flex;justify-content:space-between;align-items:center;padding:7px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:5px;margin-bottom:6px;font-size:12px}
-  #prog-wrap{height:10px;background:var(--bg);border:1px solid var(--bdr);border-radius:5px;overflow:hidden;margin-top:6px}
-  #prog-bar{height:100%;width:0%;background:var(--grn);transition:width .25s}
+  #mm-body{display:flex;flex:1;overflow:hidden;gap:12px;padding:12px}
+  #mm-left{flex:1.25;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+  #mm-right{flex:1;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+  .panel{background:var(--side);border:1px solid var(--bdr);border-radius:6px;padding:10px;display:flex;flex-direction:column;gap:8px;min-height:0}
+  .panel h3{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--acc)}
+  .scroll-list{overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding-right:4px;max-height:320px}
+  .row-card{background:var(--bg);border:1px solid var(--bdr);border-radius:5px;padding:8px;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px}
+  .row-card.active{border-color:var(--grn,#4caf50)}
+  input,select{background:var(--bg);color:var(--fg);border:1px solid var(--bdr);border-radius:4px;padding:5px 7px;font-size:12px;font-family:inherit}
+  .badge{font-size:10.5px;padding:2px 6px;border-radius:4px;border:1px solid var(--bdr);opacity:.85}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 </style>
 </head><body>
 <div id="menubar">
-  <strong style="padding:0 8px;color:var(--acc)">&#9881; Frag-MM</strong>
-  <span id="hw-bar" style="font-size:12px;opacity:.85">Checking hardware...</span>
+  <strong style="padding:0 8px;color:var(--acc)">Models &amp; Presets</strong>
+  <span id="mm-hw" style="font-size:11.5px;opacity:.75">Local + Online Models • Workflow Presets</span>
   <div class="spacer"></div>
-  <button class="tb-btn" onclick="location.href='/'">&#128187; Code Studio</button>
-  <button class="tb-btn" onclick="location.href='/media'">Media Director</button>
-  <button class="tb-btn" onclick="refreshMM()">&#8635; Refresh</button>
+  <button class="tb-btn" onclick="location.href='/'">Code Studio</button><button class="tb-btn" onclick="location.href='/mm'">Models</button><button class="tb-btn" onclick="location.href='/media'">Media</button><button class="tb-btn" onclick="if(typeof openRepoSettings==='function')openRepoSettings();else location.href='/'">Git</button>
 </div>
 <div id="mm-body">
-  <div id="mm-main">
-    <div class="card">
-      <h3>Installed Models</h3>
-      <table><thead><tr><th>Model</th><th>Size</th><th>Quant / Params</th><th>Status</th><th>Actions</th></tr></thead>
-      <tbody id="mm-list"></tbody></table>
+  <div id="mm-left">
+    <div class="panel" style="flex:1">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <h3>Installed &amp; Catalog Models (Scrollable)</h3>
+        <input id="model-filter" placeholder="Filter models or catalog..." oninput="renderModelsList()" style="width:210px">
+      </div>
+      <div class="btn-row">
+        <input id="pull-model-input" placeholder="Pull Ollama tag (e.g. qwen2.5-coder:7b)" style="flex:1">
+        <button class="tb-btn run" onclick="pullModel()">Pull</button>
+        <button class="tb-btn" onclick="refreshAll()">Refresh</button>
+      </div>
+      <div id="models-scroll" class="scroll-list" style="flex:1;max-height:none"></div>
+    </div>
+    <div class="panel">
+      <h3>Online Models (GitHub Models / Remote API)</h3>
+      <div class="btn-row">
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px">
+          <input type="checkbox" id="online-enabled"> Enable Online Models
+        </label>
+        <input id="online-endpoint" placeholder="https://models.github.ai/inference" style="flex:1">
+        <input id="online-env" placeholder="GITHUB_TOKEN" style="width:130px">
+      </div>
+      <div class="btn-row">
+        <input id="online-models-list" placeholder="Comma-separated model IDs (e.g. gpt-4o-mini, Meta-Llama-3.1-8B-Instruct)" style="flex:1">
+        <button class="tb-btn run" onclick="saveOnlineConfig()">Save Online</button>
+      </div>
+      <div id="online-status" style="font-size:11.5px;opacity:.8">Uses localhost daemon config; token read from environment variable on host.</div>
     </div>
   </div>
-  <div id="mm-side">
-    <div class="card">
-      <h3>Pull / Download Model</h3>
-      <div style="display:flex;gap:6px">
-        <input id="pull-in" placeholder="e.g. qwen2.5-coder:14b" style="flex:1;background:var(--bg);color:var(--fg);border:1px solid var(--bdr);border-radius:4px;padding:5px 8px">
-        <button class="tb-btn run" onclick="pullModel()">Pull</button>
+  <div id="mm-right">
+    <div class="panel" style="flex:1">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <h3>Workflow Presets</h3>
+        <input id="preset-search" placeholder="Search presets or topics..." oninput="renderPresets()" style="width:190px">
       </div>
-      <div id="pull-msg" style="font-size:11.5px;margin-top:8px;opacity:.9">Idle</div>
-      <div id="prog-wrap"><div id="prog-bar"></div></div>
-    </div>
-    <div class="card">
-      <h3>AI Model Finder</h3>
-      <textarea id="ai-goal" rows="2" placeholder="Describe what you want to do (e.g. fast C/ESP32 coder, vision OCR)..." style="width:100%;box-sizing:border-box;background:var(--bg);color:var(--fg);border:1px solid var(--bdr);border-radius:4px;padding:6px;resize:vertical"></textarea>
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="tb-btn run" style="flex:1" onclick="askFinder()">Find Models</button>
-        <button class="tb-btn" onclick="refreshCatalog()" title="Refresh online catalog">&#8635; Catalog</button>
+      <div class="btn-row">
+        <select id="preset-cat" onchange="renderPresets()" style="flex:1">
+          <option value="">All Topics &amp; Workflows</option>
+          <option value="Coding & Systems">Coding &amp; Systems</option>
+          <option value="Media & Storytelling">Media &amp; Storytelling</option>
+          <option value="Research & Writing">Research &amp; Writing</option>
+          <option value="Vision & Multimodal">Vision &amp; Multimodal</option>
+          <option value="Hardware & Embedded">Hardware &amp; Embedded</option>
+          <option value="Quick & Lightweight">Quick &amp; Lightweight</option>
+        </select>
+        <span id="active-preset-badge" class="badge">Active: None</span>
       </div>
-      <div id="ai-results" style="margin-top:8px"></div>
-    </div>
-    <div class="card">
-      <h3>Embedded / Coding Presets</h3>
-      <div id="presets"></div>
+      <div id="presets-scroll" class="scroll-list" style="flex:1;max-height:none"></div>
     </div>
   </div>
 </div>
-<div id="statusbar"><span>Frag-MM (Ollama Model Manager)</span><span id="mm-count">0 models</span></div>
-<script>window.STUDIO_TOKEN="__TOKEN__";</script>
-<script src="/mm.js"></script>
+<div id="statusbar"><span id="mm-foot">Ready</span><span id="mm-preset-foot">No active preset</span></div>
+<script>
+const TOKEN = "__TOKEN__";
+const CATALOG = [
+  { name: "qwen2.5-coder:7b", size: "4.4 GB", note: "Fast coding, C/Python/scripts, 8GB VRAM friendly" },
+  { name: "qwen3.5:9b", size: "6.1 GB", note: "Strong reasoning, architecture, and structured outputs" },
+  { name: "qwen3-vl:8b", size: "5.8 GB", note: "Vision & UI/hardware screenshot inspection" },
+  { name: "qwen2.5:7b", size: "4.4 GB", note: "General writing, research summaries, and Q&A" },
+  { name: "mistral:latest", size: "4.1 GB", note: "Narrative voice, creative drafts, and general chat" },
+  { name: "qwen2.5-coder:1.5b", size: "0.9 GB", note: "Ultra-fast lightweight assistant" },
+  { name: "deepseek-coder-v2:16b", size: "8.9 GB", note: "Larger coding MoE (spills to RAM on 8GB GPU)" },
+  { name: "qwen3-coder:30b", size: "17.3 GB", note: "Heavy coding model (slow/RAM-offloaded on 8GB GPU)" }
+];
+
+let installedModels = [];
+let presetsState = { presets: [], active_preset: "", online_models: {} };
+
+function setFoot(msg) { document.getElementById("mm-foot").textContent = msg; }
+
+async function postJson(url, body) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+    body: JSON.stringify(body || {})
+  });
+  return await r.json();
+}
+
+async function refreshAll() {
+  try {
+    const mRes = await fetch("/api/models");
+    const mData = await mRes.json();
+    installedModels = mData.models || [];
+  } catch (_) { installedModels = []; }
+
+  try {
+    const pRes = await fetch("/api/presets");
+    presetsState = await pRes.json();
+  } catch (_) {}
+
+  const om = presetsState.online_models || {};
+  document.getElementById("online-enabled").checked = !!om.enabled;
+  document.getElementById("online-endpoint").value = om.endpoint || "https://models.github.ai/inference";
+  document.getElementById("online-env").value = om.token_env || "GITHUB_TOKEN";
+  document.getElementById("online-models-list").value = (om.models || []).join(", ");
+
+  renderModelsList();
+  renderPresets();
+  setFoot(`Loaded ${installedModels.length} local models + ${CATALOG.length} catalog entries`);
+}
+
+function renderModelsList() {
+  const q = (document.getElementById("model-filter").value || "").toLowerCase().trim();
+  const box = document.getElementById("models-scroll");
+  box.innerHTML = "";
+
+  const installedNames = new Set(installedModels.map(m => m.name));
+  const combined = [];
+
+  installedModels.forEach(m => {
+    combined.push({
+      name: m.name,
+      installed: true,
+      meta: m.details && m.details.parameter_size ? `${m.details.parameter_size} • Installed` : "Installed"
+    });
+  });
+
+  CATALOG.forEach(c => {
+    if (!installedNames.has(c.name)) {
+      combined.push({
+        name: c.name,
+        installed: false,
+        meta: `${c.size} • Catalog — ${c.note}`
+      });
+    }
+  });
+
+  const filtered = combined.filter(item => !q || item.name.toLowerCase().includes(q) || item.meta.toLowerCase().includes(q));
+  filtered.forEach(item => {
+    const div = document.createElement("div");
+    div.className = "row-card";
+    div.innerHTML = `
+      <div>
+        <strong>${item.name}</strong>
+        <div style="font-size:11px;opacity:.78;margin-top:2px">${item.meta}</div>
+      </div>
+      <div class="btn-row">
+        ${item.installed
+          ? `<span class="badge">Local</span><button class="tb-btn" onclick="deleteModel('${item.name}')">Remove</button>`
+          : `<button class="tb-btn run" onclick="pullSpecific('${item.name}')">Pull</button>`}
+      </div>`;
+    box.appendChild(div);
+  });
+}
+
+async function pullSpecific(name) {
+  document.getElementById("pull-model-input").value = name;
+  await pullModel();
+}
+
+async function pullModel() {
+  const name = document.getElementById("pull-model-input").value.trim();
+  if (!name) return;
+  setFoot("Pulling " + name + "...");
+  const res = await postJson("/api/pull", { name });
+  setFoot(res.error ? ("Pull error: " + res.error) : ("Pull requested for " + name));
+  setTimeout(refreshAll, 1500);
+}
+
+async function deleteModel(name) {
+  if (!confirm("Remove local model '" + name + "'?")) return;
+  const res = await postJson("/api/delete", { name });
+  setFoot(res.error ? ("Delete error: " + res.error) : ("Removed " + name));
+  refreshAll();
+}
+
+async function saveOnlineConfig() {
+  const payload = {
+    enabled: document.getElementById("online-enabled").checked,
+    provider: "github",
+    endpoint: document.getElementById("online-endpoint").value.trim() || "https://models.github.ai/inference",
+    token_env: document.getElementById("online-env").value.trim() || "GITHUB_TOKEN",
+    models: document.getElementById("online-models-list").value.split(",").map(s => s.trim()).filter(Boolean)
+  };
+  await postJson("/api/online-models/config", payload);
+  document.getElementById("online-status").textContent = `Saved (${payload.enabled ? "Enabled" : "Disabled"} • ${payload.models.length} models)`;
+}
+
+function renderPresets() {
+  const q = (document.getElementById("preset-search").value || "").toLowerCase().trim();
+  const cat = document.getElementById("preset-cat").value;
+  const activeId = presetsState.active_preset || "";
+  const activeObj = (presetsState.presets || []).find(p => p.id === activeId);
+  document.getElementById("active-preset-badge").textContent = "Active: " + (activeObj ? activeObj.name : "None");
+  document.getElementById("mm-preset-foot").textContent = activeObj ? ("Active Preset: " + activeObj.name + " (" + activeObj.model + ")") : "No active preset";
+
+  const box = document.getElementById("presets-scroll");
+  box.innerHTML = "";
+  const list = (presetsState.presets || []).filter(p => {
+    if (cat && p.category !== cat) return false;
+    if (!q) return true;
+    return (p.name + " " + p.category + " " + p.model + " " + p.system_prompt).toLowerCase().includes(q);
+  });
+
+  list.forEach(p => {
+    const isActive = p.id === activeId;
+    const div = document.createElement("div");
+    div.className = "row-card" + (isActive ? " active" : "");
+    div.innerHTML = `
+      <div style="flex:1;min-width:0">
+        <div><strong>${p.name}</strong> <span class="badge">${p.category}</span></div>
+        <div style="font-size:11px;opacity:.78;margin-top:2px">Model: <code>${p.model}</code> • Temp: ${p.temperature}</div>
+        <div style="font-size:11px;opacity:.7;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.system_prompt}</div>
+      </div>
+      <div class="btn-row">
+        <button class="tb-btn ${isActive ? "" : "run"}" onclick="applyPreset('${p.id}')">${isActive ? "Active" : "Apply"}</button>
+        <button class="tb-btn" onclick="removePreset('${p.id}')">Remove</button>
+      </div>`;
+    box.appendChild(div);
+  });
+}
+
+async function applyPreset(id) {
+  const res = await postJson("/api/presets/apply", { id });
+  if (res.error) return setFoot("Apply error: " + res.error);
+  await refreshAll();
+  setFoot("Applied preset: " + (res.active_preset && res.active_preset.name));
+}
+
+async function removePreset(id) {
+  const res = await postJson("/api/presets/remove", { id });
+  if (res.error) return setFoot("Remove error: " + res.error);
+  await refreshAll();
+  setFoot("Removed preset: " + id);
+}
+
+window.addEventListener("DOMContentLoaded", refreshAll);
+</script>
 </body></html>

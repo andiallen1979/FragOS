@@ -32,8 +32,9 @@
     <div class="dd-item" onclick="togglePane('ai-pane')"><span>Toggle AI Assistant</span><span></span></div>
     <div class="dd-item" onclick="togglePane('term-pane')"><span>Toggle Terminal</span><span></span></div>
   </div></div>
-  <div class="spacer"></div><button class="tb-btn" onclick="location.href='/media'">Media Director</button><button class="tb-btn" onclick="location.href='/mm'">Frag-MM</button>
-  <button class="tb-btn" onclick="openThemeModal()">&#127912; Themes</button>
+  <div class="spacer"></div>
+  <button class="tb-btn" onclick="location.href='/mm'">Models</button><button class="tb-btn" onclick="if(typeof openRepoSettings==='function')openRepoSettings();else location.href='/'">Git &amp; Packaging</button>
+
 </div>
 
 <div id="main">
@@ -75,10 +76,11 @@
   <div id="res-ai" class="res-v"></div>
   <div id="ai-pane">
     <div class="pane-hdr" id="ai-hdr"><span>AI Assistant</span><div class="icon-row" style="align-items:center"><input id="ai-alpha" type="range" min="0.25" max="1" step="0.05" value="1" oninput="setAIOpacity(this.value)" style="display:none"><button class="ic-btn" onclick="toggleFloatAI()" title="Float / Dock">&#10697;</button><button class="ic-btn" onclick="toggleAI()" title="Collapse">&#187;</button><button class="ic-btn" onclick="clearChat()" title="Clear">&#128465;</button></div></div>
-    <div id="ai-bar"><select id="model"></select></div>
+    <div id="ai-bar"><select id="model" title="Model"></select><select id="request-mode" title="Choose output or let Frag-AI route your request"><option value="auto">Auto detect</option><option value="chat">Chat / code</option><option value="image">Generate image</option><option value="video">Generate video</option><option value="audio">Generate audio</option><option value="research">Research / script</option></select></div>
     <div id="chat"></div>
     <div id="prompt-box">
-      <textarea id="prompt" placeholder="Ask AI to write, edit, or debug the active file..."></textarea>
+      <textarea id="prompt" placeholder="Describe what you want: code, an image, a video, research, or anything your models can do..."></textarea>
+      <label class="attach-btn" for="chat-attachment">Attach image</label><input id="chat-attachment" type="file" accept="image/*" hidden><span id="attachment-name" class="attachment-name"></span>
       <button class="tb-btn run" id="sendBtn" onclick="sendChat()">Send</button>
       <button class="tb-btn" id="stopBtn" onclick="stopChat()" style="display:none;background:var(--red);border-color:#e5534b;color:#fff">Stop</button><button class="tb-btn" onclick="runCode('save')" title="Save (Ctrl+S)">&#128190;</button><button class="tb-btn run" onclick="runCode('inline')" title="Run (F5)">&#9654;</button><button class="tb-btn" onclick="runCode('konsole')" title="Konsole">&#9635;</button>
     </div>
@@ -107,4 +109,911 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/searchcursor.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/search.min.js"></script>
 <script src="/app.js"></script>
+
+<div id="repo-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;align-items:center;justify-content:center">
+  <div style="background:var(--side,#1b1e24);color:var(--fg,#eee);border:1px solid var(--bdr,#444);border-radius:8px;padding:16px;width:440px;max-width:92vw;display:flex;flex-direction:column;gap:8px;font-size:12.5px">
+    <strong style="font-size:14px">Git &amp; Packaging Configuration</strong>
+    <label>Code Working Root (~/.code)<input id="cfg-code-root" style="width:100%;box-sizing:border-box;margin-top:2px"></label>
+    <label>Versioned Archive Dir<input id="cfg-archive-root" style="width:100%;box-sizing:border-box;margin-top:2px"></label>
+    <label>Git Repository Path<input id="cfg-repo-dir" style="width:100%;box-sizing:border-box;margin-top:2px"></label>
+    <div style="display:flex;gap:8px">
+      <label style="flex:1">Remote<input id="cfg-repo-remote" style="width:100%;box-sizing:border-box;margin-top:2px"></label>
+      <label style="flex:1">Branch<input id="cfg-repo-branch" style="width:100%;box-sizing:border-box;margin-top:2px"></label>
+    </div>
+    <label>Default Package Target (e.g. app-misc/frag-ai)<input id="cfg-default-pkg" style="width:100%;box-sizing:border-box;margin-top:2px"></label>
+    <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="cfg-autopush"> Auto-push after packaging/assigning</label>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">
+      <button class="tb-btn" onclick="closeRepoSettings()">Cancel</button>
+      <button class="tb-btn run" onclick="saveRepoSettings()">Save Settings</button>
+    </div>
+  </div>
+</div>
+<script>
+const STUDIO_TOKEN = (typeof TOKEN !== "undefined") ? TOKEN : "__TOKEN__";
+let studioCfg = {};
+
+function setProjStatus(msg) {
+  const el = document.getElementById("proj-status");
+  if (el) el.textContent = msg;
+}
+
+function getActiveRelPath() {
+  if (typeof currentRel !== "undefined" && currentRel) return currentRel;
+  if (typeof activeFile !== "undefined" && activeFile) return activeFile;
+  return "";
+}
+
+async function apiPost(url, payload) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Token": STUDIO_TOKEN },
+    body: JSON.stringify(payload || {})
+  });
+  return await r.json();
+}
+
+async function refreshProjects() {
+  try {
+    const r = await fetch("/api/projects", { headers: { "X-Token": STUDIO_TOKEN } });
+    const d = await r.json();
+    studioCfg = d.config || {};
+    const sel = document.getElementById("proj-select");
+    const prev = sel.value;
+    sel.innerHTML = "";
+    currentProjectsList = d.projects || [];
+    currentProjectsList.forEach(p => {
+      const opt = document.createElement("option");
+      opt.value = p.name;
+      opt.textContent = p.name;
+      sel.appendChild(opt);
+    });
+    if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+    const ap = document.getElementById("proj-autopush");
+    const selObj = currentProjectsList.find(x => x.name === sel.value) || currentProjectsList[0] || null;
+    if (selObj) sel.value = selObj.name;
+    renderProjectFiles(selObj);
+    if (ap) ap.checked = !!(selObj ? selObj.auto_push : studioCfg.auto_push);
+  } catch (e) {
+    setProjStatus("Project load error: " + e.message);
+  }
+}
+
+
+let currentProjectsList = [];
+
+function openProjectFile(relPath) {
+  if (typeof loadFile === "function") return loadFile(relPath);
+  if (typeof openFile === "function") return openFile(relPath);
+  setProjStatus("Selected file: " + relPath);
+}
+
+function renderProjectFiles(proj) {
+  const box = document.getElementById("proj-file-list");
+  const badge = document.getElementById("proj-ver-badge");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!proj) {
+    if (badge) badge.textContent = "";
+    box.innerHTML = '<div style="opacity:.65;padding:2px">No project folder in ~/.code</div>';
+    return;
+  }
+  if (badge) badge.textContent = "v" + (proj.version || "1.0.0");
+  (proj.files || []).forEach(rel => {
+    const row = document.createElement("div");
+    row.style.cssText = "padding:2px 4px;border-radius:3px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
+    row.onmouseenter = () => row.style.background = "rgba(255,255,255,.06)";
+    row.onmouseleave = () => row.style.background = "transparent";
+    row.textContent = rel.endsWith(".frag_pro") ? ("⚙ " + rel) : ("• " + rel);
+    row.title = rel;
+    row.onclick = () => openProjectFile(rel);
+    row.oncontextmenu = (ev) => showProjContextMenu(ev, rel.startsWith(proj.name + '/') ? rel.slice(proj.name.length + 1) : rel);
+    box.appendChild(row);
+  });
+}
+
+function onProjectChange() {
+  const p = document.getElementById("proj-select").value;
+  const obj = currentProjectsList.find(x => x.name === p) || null;
+  renderProjectFiles(obj);
+  if (obj) {
+    const ap = document.getElementById("proj-autopush");
+    if (ap) ap.checked = !!obj.auto_push;
+    setProjStatus("Project: " + obj.name + " (" + (obj.pro_file || "") + ")");
+  }
+}
+
+async function createProject() {
+  const name = prompt("New project name under ~/.code:");
+  if (!name) return;
+  const d = await apiPost("/api/projects/create", { name });
+  if (d.error) return setProjStatus("Error: " + d.error);
+  setProjStatus("Created " + d.project);
+  await refreshProjects();
+  document.getElementById("proj-select").value = d.project;
+}
+
+async function assignActiveFile() {
+  const src_rel = getActiveRelPath();
+  const project = document.getElementById("proj-select").value;
+  if (!src_rel) return setProjStatus("Open a file in the editor first.");
+  const assignRepo = confirm("Also copy " + src_rel + " into Git repo (" + (studioCfg.repo_dir || "~/FragOS") + ")?");
+  const repo_target = assignRepo ? prompt("Target path inside repo (e.g. app-misc/frag-ai/files/):", (studioCfg.default_pkg || "app-misc/frag-ai") + "/files/") : "";
+  const d = await apiPost("/api/projects/assign-file", { src_rel, project, repo_target });
+  if (d.error) return setProjStatus("Assign error: " + d.error);
+  setProjStatus("Assigned to: " + (d.copied || []).join(", "));
+  if (studioCfg.auto_push) await pushRepo();
+}
+
+async function packageProjectLocal() {
+  const project = document.getElementById("proj-select").value;
+  if (!project) return setProjStatus("Select a project first.");
+  const version = prompt("Package version label:", "1.0.0") || "1.0.0";
+  const d = await apiPost("/api/projects/package-local", { project, version, pkg_rel: studioCfg.default_pkg || "" });
+  if (d.error) return setProjStatus("Package error: " + d.error);
+  setProjStatus("Packaged: " + d.package);
+  if (studioCfg.auto_push) await pushRepo();
+}
+
+async function pushRepo() {
+  const project = document.getElementById("proj-select").value || "workspace";
+  const message = prompt("Commit message:", "code-studio: update " + project);
+  if (message === null) return;
+  setProjStatus("Pushing to Git...");
+  const d = await apiPost("/api/projects/push", { project, message });
+  if (!d.ok) return setProjStatus("Push failed: " + (d.error || "check git log"));
+  setProjStatus("Pushed to " + (studioCfg.repo_remote || "origin") + "/" + (studioCfg.repo_branch || "main"));
+}
+
+async function archiveProject() {
+  const project = document.getElementById("proj-select").value;
+  if (!project) return setProjStatus("Select a project first.");
+  const version = prompt("Version tag for archive:", "1.0.0") || "1.0.0";
+  const d = await apiPost("/api/projects/archive", { project, version });
+  if (d.error) return setProjStatus("Archive error: " + d.error);
+  setProjStatus("Archived: " + d.archive);
+}
+
+async function deleteProject() {
+  const project = document.getElementById("proj-select").value;
+  if (!project) return setProjStatus("Select a project first.");
+  if (!confirm("Delete project '" + project + "' from ~/.code?")) return;
+  const archive_first = confirm("Save a versioned backup archive before deleting '" + project + "'?");
+  const d = await apiPost("/api/projects/delete", { project, archive_first });
+  if (d.error) return setProjStatus("Delete error: " + d.error);
+  setProjStatus("Deleted " + project);
+  await refreshProjects();
+}
+
+async function toggleAutoPush(checked) {
+  studioCfg.auto_push = checked;
+  await apiPost("/api/studio/config", { auto_push: checked });
+  setProjStatus("Auto-Push " + (checked ? "enabled" : "disabled"));
+}
+
+async function openRepoSettings() {
+  const r = await fetch("/api/studio/config", { headers: { "X-Token": STUDIO_TOKEN } });
+  studioCfg = await r.json();
+  document.getElementById("cfg-code-root").value = studioCfg.code_root || "~/.code";
+  document.getElementById("cfg-archive-root").value = studioCfg.archive_root || "~/.code-archives";
+  document.getElementById("cfg-repo-dir").value = studioCfg.repo_dir || "~/FragOS";
+  document.getElementById("cfg-repo-remote").value = studioCfg.repo_remote || "origin";
+  document.getElementById("cfg-repo-branch").value = studioCfg.repo_branch || "main";
+  document.getElementById("cfg-default-pkg").value = studioCfg.default_pkg || "app-misc/frag-ai";
+  document.getElementById("cfg-autopush").checked = !!studioCfg.auto_push;
+  document.getElementById("repo-modal").style.display = "flex";
+}
+
+function closeRepoSettings() {
+  document.getElementById("repo-modal").style.display = "none";
+}
+
+async function saveRepoSettings() {
+  const payload = {
+    code_root: document.getElementById("cfg-code-root").value.trim(),
+    archive_root: document.getElementById("cfg-archive-root").value.trim(),
+    repo_dir: document.getElementById("cfg-repo-dir").value.trim(),
+    repo_remote: document.getElementById("cfg-repo-remote").value.trim() || "origin",
+    repo_branch: document.getElementById("cfg-repo-branch").value.trim() || "main",
+    default_pkg: document.getElementById("cfg-default-pkg").value.trim(),
+    auto_push: document.getElementById("cfg-autopush").checked,
+  };
+  await apiPost("/api/studio/config", payload);
+  studioCfg = payload;
+  closeRepoSettings();
+  setProjStatus("Saved Git/repo settings");
+  refreshProjects();
+}
+
+window.addEventListener("DOMContentLoaded", refreshProjects);
+</script>
+
+
+<div id="proj-ctx-menu" style="display:none;position:fixed;z-index:10000;background:var(--side,#1b1e24);color:var(--fg,#eee);border:1px solid var(--bdr,#555);border-radius:6px;padding:4px;min-width:195px;box-shadow:0 6px 20px rgba(0,0,0,.45);font-size:12px"></div>
+<script>
+let ctxTargetRel = "";
+
+function populateIdeEditor(relPath, content) {
+  if (typeof currentRel !== "undefined") currentRel = relPath;
+  if (typeof activeFile !== "undefined") activeFile = relPath;
+  const ta = document.querySelector("textarea#editor, textarea.code-editor, textarea");
+  if (ta) {
+    ta.value = content;
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    ta.focus();
+  }
+  if (window.cmEditor && typeof window.cmEditor.setValue === "function") {
+    window.cmEditor.setValue(content);
+  }
+  if (window.monacoEditor && typeof window.monacoEditor.setValue === "function") {
+    window.monacoEditor.setValue(content);
+  }
+}
+
+async function openProjectFile(relPath) {
+  const proj = document.getElementById("proj-select")?.value || "";
+  const subRel = relPath.startsWith(proj + "/") ? relPath.slice(proj.length + 1) : relPath;
+  try {
+    const r = await fetch(`/api/project/file-content?project=${encodeURIComponent(proj)}&rel=${encodeURIComponent(subRel)}`, {
+      headers: { "X-Token": STUDIO_TOKEN }
+    });
+    const d = await r.json();
+    if (d.ok) {
+      populateIdeEditor(relPath, d.content || "");
+      setProjStatus("Opened in IDE: " + relPath);
+      return;
+    }
+  } catch (_) {}
+  if (typeof loadFile === "function") return loadFile(relPath);
+  if (typeof openFile === "function") return openFile(relPath);
+  setProjStatus("Selected: " + relPath);
+}
+
+async function addTrackedProjectFile() {
+  const proj = document.getElementById("proj-select")?.value;
+  if (!proj) return setProjStatus("Create or select a project first.");
+  const rel = prompt("New file name inside " + proj + "/:", "module_helper.py");
+  if (!rel) return;
+  const d = await apiPost("/api/projects/add-file", { project: proj, rel: rel.trim(), content: "" });
+  if (d.error) return setProjStatus("Add file error: " + d.error);
+  await refreshProjects();
+  await openProjectFile(proj + "/" + rel.trim());
+  setProjStatus("Added & tracked in " + proj + ".frag_pro: " + rel.trim());
+}
+
+async function removeTrackedProjectFile(specificRel) {
+  const proj = document.getElementById("proj-select")?.value;
+  if (!proj) return setProjStatus("Select a project first.");
+  const projObj = currentProjectsList.find(x => x.name === proj);
+  const candidates = (projObj?.files || []).map(f => f.startsWith(proj + "/") ? f.slice(proj.length + 1) : f).filter(f => !f.endsWith(".frag_pro"));
+  const rel = specificRel || prompt("File inside " + proj + "/ to remove:", candidates[0] || "main.py");
+  if (!rel) return;
+  const d = await apiPost("/api/projects/remove-file", { project: proj, rel: rel.trim(), delete_disk: true });
+  if (d.error) return setProjStatus("Remove file error: " + d.error);
+  await refreshProjects();
+  setProjStatus("Removed & untracked from " + proj + ".frag_pro: " + rel.trim());
+}
+
+async function tarProjectWithPro() {
+  const proj = document.getElementById("proj-select")?.value;
+  if (!proj) return setProjStatus("Select a project first.");
+  setProjStatus("Packing " + proj + ".tar.gz with " + proj + ".frag_pro...");
+  const d = await apiPost("/api/projects/tar-with-pro", { project: proj });
+  if (d.error) return setProjStatus("Tar error: " + d.error);
+  setProjStatus("Created tar bundle (" + d.tracked_count + " tracked files + .frag_pro): " + d.tar_path);
+}
+
+function hideProjContextMenu() {
+  const m = document.getElementById("proj-ctx-menu");
+  if (m) m.style.display = "none";
+}
+
+function showProjContextMenu(e, relInProj) {
+  e.preventDefault();
+  e.stopPropagation();
+  ctxTargetRel = relInProj || "";
+  const m = document.getElementById("proj-ctx-menu");
+  if (!m) return;
+  const items = [
+    ["Pack .tar.gz (with .frag_pro)", () => tarProjectWithPro()],
+    ["Add Tracked File", () => addTrackedProjectFile()],
+    ...(ctxTargetRel && !ctxTargetRel.endsWith(".frag_pro") ? [["Remove File (" + ctxTargetRel + ")", () => removeTrackedProjectFile(ctxTargetRel)]] : []),
+    ["Package Locally", () => packageProjectLocal()],
+    ["Push Repo", () => pushRepo()],
+    ["Archive Version", () => archiveProject()],
+    ["Delete Project", () => deleteProject()],
+  ];
+  m.innerHTML = "";
+  items.forEach(([label, fn]) => {
+    const row = document.createElement("div");
+    row.textContent = label;
+    row.style.cssText = "padding:6px 10px;cursor:pointer;border-radius:4px";
+    row.onmouseenter = () => row.style.background = "rgba(255,255,255,.08)";
+    row.onmouseleave = () => row.style.background = "transparent";
+    row.onclick = () => { hideProjContextMenu(); fn(); };
+    m.appendChild(row);
+  });
+  m.style.left = Math.min(e.clientX, window.innerWidth - 215) + "px";
+  m.style.top = Math.min(e.clientY, window.innerHeight - 240) + "px";
+  m.style.display = "block";
+}
+
+document.addEventListener("click", hideProjContextMenu);
+
+async function createBoilerplateProject(langId, starterName) {
+  const selId = "lang-ver-" + langId;
+  const verSel = document.getElementById(selId);
+  const chosenBin = verSel ? verSel.value : "";
+  const chosenVer = verSel ? (verSel.options[verSel.selectedIndex]?.dataset?.ver || "") : "";
+  const defaultName = (document.getElementById("proj-select")?.value || "") + "_" + langId + "_app";
+  const projName = prompt("Boilerplate project name in ~/.code:", defaultName.replace(/^_+/, ""));
+  if (!projName) return;
+  const d = await apiPost("/api/projects/create-boilerplate", {
+    name: projName.trim(),
+    lang_id: langId,
+    selected_bin: chosenBin,
+    selected_ver: chosenVer,
+  });
+  if (d.error) return setProjStatus("Boilerplate error: " + d.error);
+  await refreshProjects();
+  const sel = document.getElementById("proj-select");
+  if (sel) { sel.value = d.project; onProjectChange(); }
+  if (d.open_rel) {
+    populateIdeEditor(d.open_rel, d.content || "");
+    await openProjectFile(d.open_rel);
+  }
+  setProjStatus("Created & loaded boilerplate: " + (d.open_rel || d.project));
+}
+
+async function loadDetectedLanguages() {
+  const box = document.getElementById("kicad-lang-cards");
+  if (!box) return;
+  box.innerHTML = '<div style="font-size:12px;opacity:.7">Detecting installed compilers, interpreters, and versions...</div>';
+  try {
+    const r = await fetch("/api/languages", { headers: { "X-Token": STUDIO_TOKEN } });
+    const d = await r.json();
+    const langs = d.languages || [];
+    box.innerHTML = "";
+    if (!langs.length) {
+      box.innerHTML = '<div style="font-size:12px;opacity:.7">No matching language toolchains found in PATH.</div>';
+      return;
+    }
+    langs.forEach(l => {
+      const vers = l.versions || [{ bin: l.bin, path: l.path, version: l.version }];
+      const hasMulti = vers.length > 1;
+      const verSelectHtml = hasMulti
+        ? `<select id="lang-ver-${l.id}" style="background:var(--side);color:var(--fg);border:1px solid var(--bdr);border-radius:4px;padding:3px 6px;font-size:11px">` +
+          vers.map(v => `<option value="${v.bin}" data-ver="${(v.version || "").replace(/"/g, "&quot;")}">${v.bin} (${v.version || v.path})</option>`).join("") +
+          `</select>`
+        : `<input type="hidden" id="lang-ver-${l.id}" value="${vers[0].bin}" data-ver="${(vers[0].version || "").replace(/"/g, "&quot;")}">`;
+      const card = document.createElement("div");
+      card.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--bg);border:1px solid var(--bdr);border-radius:5px;padding:8px 10px;font-size:12px";
+      card.innerHTML = `
+        <div style="min-width:0;flex:1">
+          <div><strong>${l.label}</strong> <span style="opacity:.7">(${vers.length} version${vers.length > 1 ? "s" : ""})</span></div>
+          <div style="font-size:11px;opacity:.8;margin-top:2px">${l.desc}</div>
+          <div style="font-size:10.5px;opacity:.68;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${l.path} — ${l.version}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end">
+          ${verSelectHtml}
+          <button class="tb-btn run" onclick="createBoilerplateProject('${l.id}','${l.starter}')">New ${l.starter} Boilerplate</button>
+        </div>`;
+      box.appendChild(card);
+    });
+  } catch (e) {
+    box.innerHTML = '<div style="font-size:12px;color:var(--red,#f66)">Language probe error: ' + e.message + '</div>';
+  }
+}
+</script>
+
+
+<div id="proj-ctx-menu" style="display:none;position:fixed;z-index:10000;background:var(--side,#1b1e24);color:var(--fg,#eee);border:1px solid var(--bdr,#555);border-radius:6px;padding:4px;min-width:210px;box-shadow:0 6px 20px rgba(0,0,0,.45);font-size:12px"></div>
+<script>
+function hideProjContextMenu() {
+  const m = document.getElementById("proj-ctx-menu");
+  if (m) m.style.display = "none";
+}
+
+function showProjContextMenu(e, relInProj) {
+  e.preventDefault();
+  e.stopPropagation();
+  const m = document.getElementById("proj-ctx-menu");
+  if (!m) return;
+  const items = [
+    ["＋ New Project", () => createProject()],
+    ["🗜 Pack .tar.gz (with .frag_pro)", () => tarProjectWithPro()],
+    ["📄＋ Add File to Project", () => addTrackedProjectFile()],
+    ...(relInProj && !relInProj.endsWith(".frag_pro") ? [["📄− Remove File (" + relInProj + ")", () => removeTrackedProjectFile(relInProj)]] : [["📄− Remove File...", () => removeTrackedProjectFile()]]),
+    ["📦 Package Locally", () => packageProjectLocal()],
+    ["⬆ Push to Repo", () => pushRepo()],
+    ["🗄 Archive Version", () => archiveProject()],
+    ["🗑 Delete Project", () => deleteProject()],
+  ];
+  m.innerHTML = "";
+  items.forEach(([label, fn]) => {
+    const row = document.createElement("div");
+    row.textContent = label;
+    row.style.cssText = "padding:6px 10px;cursor:pointer;border-radius:4px";
+    row.onmouseenter = () => row.style.background = "rgba(255,255,255,.08)";
+    row.onmouseleave = () => row.style.background = "transparent";
+    row.onclick = () => { hideProjContextMenu(); fn(); };
+    m.appendChild(row);
+  });
+  m.style.left = Math.min(e.clientX, window.innerWidth - 225) + "px";
+  m.style.top = Math.min(e.clientY, window.innerHeight - 280) + "px";
+  m.style.display = "block";
+}
+
+document.addEventListener("click", hideProjContextMenu);
+
+(function attachFileContextMenus() {
+  const origRender = window.renderProjectFiles;
+  if (typeof origRender === "function") {
+    window.renderProjectFiles = function(proj) {
+      origRender(proj);
+      const box = document.getElementById("proj-file-list");
+      if (!box || !proj) return;
+      [...box.children].forEach((row, idx) => {
+        const fullRel = (proj.files || [])[idx] || "";
+        const subRel = fullRel.startsWith(proj.name + "/") ? fullRel.slice(proj.name.length + 1) : fullRel;
+        row.oncontextmenu = (ev) => showProjContextMenu(ev, subRel);
+      });
+    };
+  }
+})();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- FRAG_KICAD_MULTI_PART_START -->
+<div id="frag-kicad-ctx" style="display:none;position:fixed;z-index:10000;background:#181b20;color:#f1f5f9;border:1px solid #475569;border-radius:6px;padding:4px;min-width:240px;box-shadow:0 8px 24px rgba(0,0,0,.55);font-size:12px"></div>
+<script>
+(function() {
+  try {
+    if (window.__fragKicadMultiPartReady) return;
+    window.__fragKicadMultiPartReady = true;
+
+    const tok = () => (typeof TOKEN !== "undefined") ? TOKEN : ((typeof STUDIO_TOKEN !== "undefined") ? STUDIO_TOKEN : "");
+    const BOILERS = [
+      { id: "python", label: "Python (main.py)", starter: "main.py", versions: [{ bin: "python3", version: "Python 3" }] },
+      { id: "c", label: "C (main.c)", starter: "main.c", versions: [{ bin: "gcc", version: "gcc" }, { bin: "clang", version: "clang" }] },
+      { id: "cpp", label: "C++ (main.cpp)", starter: "main.cpp", versions: [{ bin: "g++", version: "g++" }, { bin: "clang++", version: "clang++" }] },
+      { id: "rust", label: "Rust (main.rs)", starter: "main.rs", versions: [{ bin: "rustc", version: "rustc" }] },
+      { id: "go", label: "Go (main.go)", starter: "main.go", versions: [{ bin: "go", version: "go" }] },
+      { id: "shell", label: "Shell (run.sh)", starter: "run.sh", versions: [{ bin: "bash", version: "bash" }, { bin: "sh", version: "sh" }] },
+      { id: "lua", label: "Lua (main.lua)", starter: "main.lua", versions: [{ bin: "lua", version: "lua" }] },
+      { id: "javascript", label: "JavaScript (index.js)", starter: "index.js", versions: [{ bin: "node", version: "node" }] },
+      { id: "typescript", label: "TypeScript (index.ts)", starter: "index.ts", versions: [{ bin: "tsc", version: "tsc" }] },
+      { id: "zig", label: "Zig (main.zig)", starter: "main.zig", versions: [{ bin: "zig", version: "zig" }] }
+    ];
+
+    let collapsedDirs = new Set();
+    const setStatus = (m) => { const el = document.getElementById("proj-status"); if (el) el.textContent = m; };
+    const getInput = () => (document.getElementById("proj-inline-name")?.value || "").trim().replace(/^\/+|\/+$/g, "");
+    const getProj = () => document.getElementById("proj-select")?.value || "";
+
+    async function postJson(url, body) {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Token": tok() },
+        body: JSON.stringify(body || {})
+      });
+      return await r.json();
+    }
+
+    function openOnRightEditor(fullRel, content) {
+      try {
+        if (typeof currentRel !== "undefined") currentRel = fullRel;
+        if (typeof activeFile !== "undefined") activeFile = fullRel;
+        const base = fullRel.split("/").pop();
+        const tab = document.querySelector(".tab.active, [class*='tab'].active, [role='tab'][aria-selected='true']");
+        if (tab) {
+          for (const n of tab.childNodes) {
+            if (n.nodeType === Node.TEXT_NODE && n.textContent.trim()) {
+              n.textContent = " " + base + " ";
+              break;
+            }
+          }
+        }
+        const editors = [...document.querySelectorAll("textarea#editor, textarea.code-editor, textarea")];
+        const rightEditor = editors.sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left)[0] || editors[0];
+        if (rightEditor && typeof content === "string") {
+          rightEditor.value = content;
+          rightEditor.dispatchEvent(new Event("input", { bubbles: true }));
+          rightEditor.dispatchEvent(new Event("change", { bubbles: true }));
+          rightEditor.focus();
+        }
+        if (window.cmEditor && typeof window.cmEditor.setValue === "function" && typeof content === "string") {
+          window.cmEditor.setValue(content);
+        }
+        if (window.monacoEditor && typeof window.monacoEditor.setValue === "function" && typeof content === "string") {
+          window.monacoEditor.setValue(content);
+        }
+        if (typeof renderTabs === "function") renderTabs();
+      } catch (_) {}
+    }
+
+    window.fragOpenFile = async function(projName, fullRel) {
+      const target = fullRel.includes("/") ? fullRel : (projName ? `${projName}/${fullRel}` : fullRel);
+      const parts = target.split("/");
+      const pName = projName || parts[0] || "";
+      const subRel = target.startsWith(pName + "/") ? target.slice(pName.length + 1) : target;
+      for (const fn of ["openFile", "loadFile", "selectFile"]) {
+        if (typeof window[fn] === "function") {
+          try { await window[fn](target); setStatus("Project: ~/.code/" + target); return; } catch (_) {}
+        }
+      }
+      try {
+        const r = await fetch(`/api/project/file-content?project=${encodeURIComponent(pName)}&rel=${encodeURIComponent(subRel)}`, {
+          headers: { "X-Token": tok() }
+        });
+        const d = await r.json();
+        if (d.ok) {
+          openOnRightEditor(target, d.content || "");
+          setStatus("Project: ~/.code/" + target);
+        }
+      } catch (_) {}
+    };
+
+    function buildTree(files, projName, proFileName) {
+      const root = { dirs: {}, files: [] };
+      (files || []).forEach(fullRel => {
+        const rel = (projName && fullRel.startsWith(projName + "/")) ? fullRel.slice(projName.length + 1) : fullRel;
+        if (!rel || rel === proFileName || rel === (projName + ".frag_pro")) return;
+        const parts = rel.split("/").filter(Boolean);
+        if (!parts.length) return;
+        let cur = root;
+        for (let i = 0; i < parts.length - 1; i++) {
+          const d = parts[i];
+          if (!cur.dirs[d]) cur.dirs[d] = { dirs: {}, files: [] };
+          cur = cur.dirs[d];
+        }
+        cur.files.push({ name: parts[parts.length - 1], rel, fullRel });
+      });
+      return root;
+    }
+
+    function renderKiCadTree(box, proj) {
+      box.innerHTML = "";
+      if (!proj) {
+        box.innerHTML = '<div style="opacity:.65;padding:6px">No project open in ~/.code</div>';
+        setStatus("Project: ~/.code");
+        return;
+      }
+      const proName = proj.pro_file || (proj.name + ".frag_pro");
+      setStatus(`Project: /home/andi/.code/${proj.name}/${proName}`);
+
+      const rootRow = document.createElement("div");
+      rootRow.style.cssText = "padding:3px 6px;font-weight:700;color:#f8fafc;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
+      rootRow.textContent = "▾ 📄 " + proName;
+      rootRow.onclick = () => window.fragOpenFile(proj.name, `${proj.name}/${proName}`);
+      rootRow.addEventListener("contextmenu", (e) => window.fragShowCtx(e, "", "project"));
+      box.appendChild(rootRow);
+
+      const tree = buildTree(proj.files || [], proj.name, proName);
+      function walk(node, prefix, depth) {
+        Object.keys(node.dirs).sort().forEach(dirName => {
+          const key = prefix ? `${prefix}/${dirName}` : dirName;
+          const hidden = collapsedDirs.has(key);
+          const dRow = document.createElement("div");
+          dRow.style.cssText = `padding:3px ${6 + depth * 14}px;cursor:pointer;border-radius:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`;
+          dRow.textContent = `${hidden ? "▸" : "▾"} 📁 ${dirName}`;
+          dRow.onclick = () => { if (hidden) collapsedDirs.delete(key); else collapsedDirs.add(key); renderKiCadTree(box, proj); };
+          dRow.addEventListener("contextmenu", (e) => window.fragShowCtx(e, key, "dir"));
+          box.appendChild(dRow);
+          if (!hidden) walk(node.dirs[dirName], key, depth + 1);
+        });
+        node.files.sort((a, b) => a.name.localeCompare(b.name)).forEach(f => {
+          const fRow = document.createElement("div");
+          fRow.style.cssText = `padding:3px ${6 + depth * 14}px;cursor:pointer;border-radius:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`;
+          fRow.textContent = `📄 ${f.name}`;
+          fRow.title = f.fullRel;
+          fRow.onmouseenter = () => fRow.style.background = "rgba(255,255,255,.08)";
+          fRow.onmouseleave = () => fRow.style.background = "transparent";
+          fRow.onclick = () => window.fragOpenFile(proj.name, f.fullRel);
+          fRow.addEventListener("contextmenu", (e) => window.fragShowCtx(e, f.rel, "file"));
+          box.appendChild(fRow);
+        });
+      }
+      walk(tree, "", 1);
+    }
+
+    function syncVersions() {
+      const tSel = document.getElementById("proj-type-select");
+      const vSel = document.getElementById("proj-ver-select");
+      if (!tSel || !vSel) return;
+      const bObj = BOILERS.find(x => x.id === tSel.value) || BOILERS[0];
+      const vers = bObj.versions || [];
+      vSel.innerHTML = "";
+      vers.forEach(v => {
+        const o = document.createElement("option");
+        o.value = v.bin;
+        o.dataset.ver = v.version;
+        o.textContent = v.version;
+        vSel.appendChild(o);
+      });
+      vSel.style.display = vers.length > 1 ? "" : "none";
+    }
+
+    window.fragRefreshProjects = async function(preferred) {
+      const sel = document.getElementById("proj-select");
+      const box = document.getElementById("proj-file-list");
+      if (!sel || !box) return;
+      try {
+        const r = await fetch("/api/projects", { headers: { "X-Token": tok() } });
+        const d = await r.json();
+        const list = d.projects || [];
+        const want = preferred || sel.value;
+        sel.innerHTML = "";
+        list.forEach(p => {
+          const o = document.createElement("option");
+          o.value = p.name;
+          o.textContent = `${p.name} (${p.pro_file || p.name + ".frag_pro"})`;
+          sel.appendChild(o);
+        });
+        if (want && [...sel.options].some(o => o.value === want)) sel.value = want;
+        const active = list.find(p => p.name === sel.value) || list[0] || null;
+        if (active) sel.value = active.name;
+        renderKiCadTree(box, active);
+      } catch (e) { setStatus("Error: " + e.message); }
+    };
+
+    window.fragCreateProject = async function() {
+      const name = getInput();
+      if (!name) { setStatus("Type a project name first."); document.getElementById("proj-inline-name")?.focus(); return; }
+      const lang_id = document.getElementById("proj-type-select")?.value || "python";
+      const vSel = document.getElementById("proj-ver-select");
+      const selected_bin = vSel?.value || "";
+      const selected_ver = vSel?.selectedOptions?.[0]?.dataset?.ver || "";
+      const d = await postJson("/api/projects/create", { name, lang_id, selected_bin, selected_ver });
+      if (d.error) return setStatus("Error: " + d.error);
+
+      await window.fragRefreshProjects(d.project);
+      if (typeof loadTree === "function") { try { loadTree(); } catch (_) {} }
+
+      const bObj = BOILERS.find(x => x.id === lang_id) || BOILERS[0];
+      const starterFile = d.starter_file || `${d.project}/${bObj.starter}`;
+      const starterCode = typeof d.starter_content === "string"
+        ? d.starter_content
+        : `#!/usr/bin/env ${selected_bin || "python3"}\n\ndef main():\n    print("Project ${d.project}")\n\nif __name__ == "__main__":\n    main()\n`;
+      openOnRightEditor(starterFile, starterCode);
+      await window.fragOpenFile(d.project, starterFile);
+    };
+
+    window.fragAddPart = async function() {
+      const proj = getProj();
+      const partName = getInput();
+      if (!proj || !partName) return setStatus("Select a project and type a part name.");
+      const d = await postJson("/api/projects/add-part", { project: proj, part: partName });
+      if (d.error) {
+        // Fallback: create part file under parts/<partName>/<partName>.py
+        const rel = `parts/${partName}/${partName}.py`;
+        const code = `"""Part: ${partName} in ${proj}."""\n\n\ndef main() -> None:\n    print("Part ${partName}")\n`;
+        const r2 = await postJson("/api/projects/add-file", { project: proj, rel, content: code });
+        if (r2.error) return setStatus("Error: " + r2.error);
+        await window.fragRefreshProjects(proj);
+        openOnRightEditor(`${proj}/${rel}`, code);
+        await window.fragOpenFile(proj, `${proj}/${rel}`);
+        return;
+      }
+      await window.fragRefreshProjects(proj);
+      if (typeof d.part_content === "string") openOnRightEditor(d.part_file, d.part_content);
+      await window.fragOpenFile(proj, d.part_file);
+    };
+
+    window.fragAddFile = async function(dirPrefix) {
+      const proj = getProj(), typed = getInput();
+      if (!proj || !typed) return setStatus("Select a project and enter a file name.");
+      const rel = dirPrefix ? `${dirPrefix}/${typed}`.replace(/\/+/g, "/") : typed;
+      const d = await postJson("/api/projects/add-file", { project: proj, rel, content: "" });
+      if (d.error) return setStatus("Error: " + d.error);
+      await window.fragRefreshProjects(proj);
+      await window.fragOpenFile(proj, `${proj}/${rel}`);
+    };
+
+    window.fragRemoveFile = async function(explicitRel) {
+      const proj = getProj();
+      const rel = explicitRel || getInput() || ((typeof currentRel === "string" && currentRel.startsWith(proj + "/")) ? currentRel.slice(proj.length + 1) : "");
+      if (!proj || !rel) return setStatus("Select/type a project file to remove.");
+      const d = await postJson("/api/projects/remove-file", { project: proj, rel, delete_disk: true });
+      if (d.error) return setStatus("Error: " + d.error);
+      await window.fragRefreshProjects(proj);
+    };
+
+    window.fragPackageLocal = async function() {
+      const proj = getProj(); if (!proj) return setStatus("Select a project first.");
+      const d = await postJson("/api/projects/package-local", { project: proj, version: getInput() || "1.0.0" });
+      setStatus(d.error ? ("Error: " + d.error) : ("Packaged: " + d.package));
+    };
+
+    window.fragTarBundle = async function() {
+      const proj = getProj(); if (!proj) return setStatus("Select a project first.");
+      const d = await postJson("/api/projects/tar-with-pro", { project: proj });
+      setStatus(d.error ? ("Error: " + d.error) : ("Tar: " + d.tar_path));
+    };
+
+    window.fragPushRepo = async function() {
+      const proj = getProj() || "workspace";
+      const d = await postJson("/api/projects/push", { project: proj, message: getInput() || ("code-studio: update " + proj) });
+      setStatus(d.ok ? ("Pushed " + proj) : ("Push failed: " + (d.error || "")));
+    };
+
+    window.fragArchive = async function() {
+      const proj = getProj(); if (!proj) return setStatus("Select a project first.");
+      const d = await postJson("/api/projects/archive", { project: proj, version: getInput() || "1.0.0" });
+      setStatus(d.error ? ("Error: " + d.error) : ("Archived: " + d.archive));
+    };
+
+    window.fragDeleteProject = async function() {
+      const proj = getProj(); if (!proj) return setStatus("Select a project first.");
+      const d = await postJson("/api/projects/delete", { project: proj, archive_first: true });
+      if (d.error) return setStatus("Error: " + d.error);
+      await window.fragRefreshProjects();
+    };
+
+    function hideCtx() {
+      const m = document.getElementById("frag-kicad-ctx");
+      if (m) m.style.display = "none";
+    }
+
+    window.fragShowCtx = function(e, relTarget, kind) {
+      e.preventDefault(); e.stopPropagation();
+      const m = document.getElementById("frag-kicad-ctx");
+      if (!m) return;
+      const items = [
+        ["New Project", () => window.fragCreateProject()],
+        ["New Part (parts/<name>)", () => window.fragAddPart()],
+        ["New File" + (kind === "dir" && relTarget ? ` in ${relTarget}/` : ""), () => window.fragAddFile(kind === "dir" ? relTarget : "")],
+        ...(kind === "file" && relTarget ? [["Delete File (" + relTarget + ")", () => window.fragRemoveFile(relTarget)]] : []),
+        ["Refresh Tree", () => window.fragRefreshProjects(getProj())],
+        ["Archive Project", () => window.fragArchive()],
+        ["Tar Bundle (.frag_pro)", () => window.fragTarBundle()],
+        ["Package Locally", () => window.fragPackageLocal()],
+        ["Push Repo", () => window.fragPushRepo()],
+        ["Delete Project", () => window.fragDeleteProject()]
+      ];
+      m.innerHTML = "";
+      items.forEach(([label, fn]) => {
+        const row = document.createElement("div");
+        row.textContent = label;
+        row.style.cssText = "padding:6px 10px;cursor:pointer;border-radius:4px;white-space:nowrap";
+        row.onmouseenter = () => row.style.background = "rgba(255,255,255,.08)";
+        row.onmouseleave = () => row.style.background = "transparent";
+        row.onclick = () => { hideCtx(); fn(); };
+        m.appendChild(row);
+      });
+      m.style.left = Math.min(e.clientX, window.innerWidth - 245) + "px";
+      m.style.top = Math.min(e.clientY, window.innerHeight - 310) + "px";
+      m.style.display = "block";
+    };
+
+    document.addEventListener("click", hideCtx);
+
+    const btnStyle = "padding:4px 7px;background:#272b33;color:#f1f5f9;border:1px solid #475569;border-radius:4px;cursor:pointer;font-size:11.5px;font-weight:600;line-height:1.1";
+
+    function mountPane() {
+      const pane = document.createElement("div");
+      pane.id = "frag-project-pane";
+      pane.style.cssText = "padding:8px;border-bottom:1px solid #334155;background:#181b20;color:#f1f5f9;font-size:12px;display:flex;flex-direction:column;gap:6px";
+      pane.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:700;letter-spacing:.03em;color:#cbd5e1">
+          <span>Project Files</span>
+          <button type="button" onclick="fragRefreshProjects(document.getElementById('proj-select')?.value)" style="${btnStyle};padding:2px 6px">↻</button>
+        </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          <button type="button" onclick="fragCreateProject()" style="${btnStyle};background:#166534;border-color:#22c55e;color:#fff">+ Project</button>
+          <button type="button" onclick="fragAddPart()" style="${btnStyle}">+ Part</button>
+          <button type="button" onclick="fragAddFile()" style="${btnStyle}">+ File</button>
+          <button type="button" onclick="fragRemoveFile()" style="${btnStyle}">- File</button>
+          <button type="button" onclick="fragArchive()" style="${btnStyle}">Archive</button>
+          <button type="button" onclick="fragTarBundle()" style="${btnStyle}">Tar</button>
+          <button type="button" onclick="fragPackageLocal()" style="${btnStyle}">Pkg</button>
+          <button type="button" onclick="fragPushRepo()" style="${btnStyle}">Push</button>
+          <button type="button" onclick="fragDeleteProject()" style="${btnStyle};background:#7f1d1d;border-color:#ef4444;color:#fecaca">Delete</button>
+        </div>
+        <input id="proj-inline-name" type="text" placeholder="Project, part, or file name..." onkeydown="if(event.key==='Enter')fragCreateProject()" style="width:100%;box-sizing:border-box;background:#0f1115;color:#f8fafc;border:1px solid #475569;border-radius:4px;padding:5px 7px;font-size:12px">
+        <div style="display:flex;gap:4px">
+          <select id="proj-type-select" title="Boilerplate type" style="flex:1;min-width:100px;background:#0f1115;color:#f8fafc;border:1px solid #475569;border-radius:4px;padding:4px 6px;font-size:11.5px"></select>
+          <select id="proj-ver-select" title="Toolchain version" style="min-width:72px;background:#0f1115;color:#f8fafc;border:1px solid #475569;border-radius:4px;padding:4px 6px;font-size:11.5px;display:none"></select>
+        </div>
+        <select id="proj-select" onchange="fragRefreshProjects(this.value)" style="width:100%;box-sizing:border-box;background:#0f1115;color:#f8fafc;border:1px solid #475569;border-radius:4px;padding:4px 6px;font-size:12px"></select>
+        <div id="proj-file-list" style="height:210px;overflow-y:auto;background:#0f1115;border:1px solid #334155;border-radius:4px;padding:4px;font-size:11.5px"></div>
+        <div id="proj-status" style="font-size:11px;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Project: ~/.code</div>
+      `;
+      pane.addEventListener("contextmenu", (e) => window.fragShowCtx(e, "", "pane"));
+
+      const tSel = pane.querySelector("#proj-type-select");
+      BOILERS.forEach(b => {
+        const o = document.createElement("option");
+        o.value = b.id;
+        o.textContent = b.label;
+        tSel.appendChild(o);
+      });
+      tSel.addEventListener("change", syncVersions);
+      syncVersions();
+
+      const hosts = [...document.querySelectorAll("div, aside, section")].filter(el => {
+        const r = el.getBoundingClientRect();
+        return r.width > 120 && r.width < window.innerWidth * 0.45 && r.height > 200 && /EXPLORER/i.test(el.textContent || "");
+      });
+      const host = hosts.sort((a, b) => (a.getBoundingClientRect().width * a.getBoundingClientRect().height) - (b.getBoundingClientRect().width * b.getBoundingClientRect().height))[0];
+      if (host) {
+        host.insertBefore(pane, host.firstChild);
+      } else {
+        const fallback = [...document.querySelectorAll("div, aside, section")].find(el => {
+          const r = el.getBoundingClientRect();
+          return r.width > 120 && r.width < window.innerWidth * 0.45 && r.height > 200;
+        });
+        if (fallback) fallback.insertBefore(pane, fallback.firstChild);
+        else document.body.prepend(pane);
+      }
+      window.fragRefreshProjects();
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", mountPane, { once: true });
+    } else {
+      mountPane();
+    }
+  } catch (err) {
+    console.error("fragKicadMultiPart error:", err);
+  }
+})();
+</script>
+<!-- FRAG_KICAD_MULTI_PART_END -->
+<!-- FRAG_KICAD_CLEAN_ROOT_START -->
+<script>
+(function() {
+  try {
+    if (window.__fragKicadCleanRoot) return;
+    window.__fragKicadCleanRoot = true;
+
+    const origOpen = window.fragOpenFile;
+    window.fragOpenFile = async function(projName, fullRel) {
+      const target = fullRel.includes("/") ? fullRel : (projName ? `${projName}/${fullRel}` : fullRel);
+      const pName = projName || target.split("/")[0] || "";
+      const proName = `${pName}.frag_pro`;
+      const isRootPro = target === `${pName}/${proName}` || target.endsWith(`/${proName}`);
+      if (isRootPro) {
+        const el = document.getElementById("proj-status");
+        if (el) el.textContent = `Project: /home/andi/.code/${pName}/${proName}`;
+        return;
+      }
+      if (typeof origOpen === "function") return await origOpen(projName, fullRel);
+    };
+
+    const origRefresh = window.fragRefreshProjects;
+    window.fragRefreshProjects = async function(preferred) {
+      if (typeof origRefresh === "function") await origRefresh(preferred);
+      const sel = document.getElementById("proj-select");
+      const box = document.getElementById("proj-file-list");
+      const st = document.getElementById("proj-status");
+      const pName = sel?.value || "";
+      if (pName) {
+        const proName = `${pName}.frag_pro`;
+        if (box) {
+          const rows = [...box.children];
+          if (rows[0]) rows[0].textContent = "▾ 📄 " + proName;
+        }
+        if (st && st.textContent.startsWith("Project: ~/.code/")) {
+          st.textContent = `Project: /home/andi/.code/${pName}/${proName}`;
+        }
+      }
+    };
+
+    setTimeout(() => window.fragRefreshProjects(), 150);
+  } catch (_) {}
+})();
+</script>
+<!-- FRAG_KICAD_CLEAN_ROOT_END -->
 </body></html>
