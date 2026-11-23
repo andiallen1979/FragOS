@@ -119,7 +119,10 @@ def main():
             from diffusers import AutoPipelineForText2Image
             img_model = job.get("img_model") or "stabilityai/sdxl-turbo"
             pipe = AutoPipelineForText2Image.from_pretrained(img_model, torch_dtype=torch.float16, variant="fp16")
-            pipe.enable_model_cpu_offload()
+            if torch.cuda.is_available():
+                pipe.enable_model_cpu_offload()
+            else:
+                pipe.to("cpu")
             pipe.vae.enable_slicing()
             for i, sc in enumerate(scenes):
                 set_status(job_dir, "images", f"Rendering image {i+1}/{len(scenes)}...")
